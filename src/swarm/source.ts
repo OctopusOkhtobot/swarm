@@ -31,9 +31,11 @@ const TEXT_EXT = new Set([
 export function parseGithub(input: string): GithubRef | null {
   const trimmed = input.trim().replace(/\.git\/?$/, "");
   if (!trimmed) return null;
-  const blob = trimmed.match(/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/blob\/[^/]+\/(.+)$/i);
+  const raw = trimmed.match(/raw\.githubusercontent\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/[^/]+\/(.+)$/i);
+  if (raw) return { owner: raw[1], repo: raw[2], start: decodeURIComponent((raw[3] ?? "").split("?")[0] ?? "") };
+  const blob = trimmed.match(/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)\/(?:blob|tree)\/[^/]+\/(.+)$/i);
   if (blob) {
-    return { owner: blob[1], repo: blob[2], start: decodeURIComponent(blob[3].split("?")[0] ?? blob[3]) };
+    return { owner: blob[1], repo: blob[2], start: decodeURIComponent((blob[3] ?? "").split("?")[0] ?? "") };
   }
   const web = trimmed.match(/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)/i);
   if (web) return { owner: web[1], repo: web[2] };

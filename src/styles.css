@@ -371,6 +371,12 @@ body:has(.stage) {
   color: #06210f;
 }
 
+.ghost.is-spider {
+  border-color: transparent;
+  background: #ff4ad8;
+  color: #2a0524;
+}
+
 .go {
   padding: 0 1.35rem;
   font-weight: 600;

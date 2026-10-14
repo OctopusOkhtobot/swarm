@@ -1,4 +1,5 @@
 import type { Sfx } from "./audio";
+import { makeWeb, quadAt, strandPoint, sway, type Anchor, type Pt, type Web } from "./web";
 
 export type NormBox = { x: number; y: number; w: number; h: number };
 export type Scan = { boxes: NormBox[]; dark: boolean; barren: boolean };
@@ -7,10 +8,10 @@ export type DocLine = { y: number; h: number; x0: number; x1: number; text: stri
 export type Weave = "rhyme" | "topic";
 export type Surface = "void" | "table" | "photo";
 
+const TAU = Math.PI * 2;
 const LEGS = ["#5ce1ff", "#ff4ad8", "#d6ff4a", "#ffd24a", "#ff5d3a", "#c9a6ff", "#5ce1ff", "#ff4ad8"];
-const LINE_COLORS = ["#5ce1ff", "#ff4ad8", "#d6ff4a", "#ffd24a"];
+const LINE_COLORS = ["#ff4ad8", "#ff8a1e", "#3dff8a", "#5ce1ff"];
 
-type Pt = { x: number; y: number };
 type Word = Pt & { w: number; h: number };
 type Line = { y: number; h: number; x0: number; x1: number; words: Word[] };
 type Mark = Word & { color: string; a: number; on: boolean; spin: boolean; t: number };
@@ -34,6 +35,9 @@ type Agent = {
   tickT: number;
   body: Pt;
   feet: Pt[];
+  stepU: number[];
+  stepFrom: Pt[];
+  stepCool: number[];
   marks: Mark[];
   pulses: Pulse[];
 };
@@ -47,10 +51,6 @@ type Page = {
   barren: boolean;
   lines: Line[];
 };
-const BALL_FILL = ["#101114", "#f6f6f1", "#22c55e"] as const;
-const BALL_INK = ["#f6f6f1", "#101114", "#f6f6f1"] as const;
-const BALL_RIM = ["#f6f6f1", "#101114", "#052e16"] as const;
-const METAL = ["#c5ccd6", "#e4c27a", "#d4896c"] as const;
 
 type BallKind = "metal" | "rubber";
 type Spark = { x: number; y: number; vx: number; vy: number; t: number; metal: boolean };
@@ -80,6 +80,31 @@ type Ball = {
   fromY: number;
   landX: number;
   landY: number;
+  h: number;
+  vh: number;
+  face: number;
+};
+
+type Spider = {
+  edge: number;
+  u: number;
+  dir: 1 | -1;
+  speed: number;
+  pause: number;
+  size: number;
+  accent: string;
+  age: number;
+  x: number;
+  y: number;
+  heading: number;
+  hop: number;
+  hopV: number;
+  hopWait: number;
+  body: Pt;
+  feet: Pt[];
+  stepU: number[];
+  stepFrom: Pt[];
+  stepCool: number[];
 };
 
 export function loadImage(url: string): Promise<HTMLImageElement> {
@@ -366,6 +391,9 @@ function makeAgent(pageIndex: number, lines: Line[]): Agent {
     tickT: 0.08,
     body: { ...origin },
     feet: Array.from({ length: 8 }, () => ({ ...origin })),
+    stepU: Array.from({ length: 8 }, () => -1),
+    stepFrom: Array.from({ length: 8 }, () => ({ ...origin })),
+    stepCool: Array.from({ length: 8 }, (_, i) => 0.02 * i),
     marks: [],
     pulses: [],
     budget: Math.max(1, lines.length),
@@ -375,8 +403,6 @@ function makeAgent(pageIndex: number, lines: Line[]): Agent {
 export type CrawlStats = { agents: number; pages: number; lines: number; seen: number[]; threads: number; left: number };
 export type CrawlHandle = { stop: () => void; toggle: () => boolean; grokbot: () => boolean; friends: () => boolean };
 
-type Anchor = { x: number; y: number; rel: number; score: number };
-type Thread = { x0: number; y0: number; x1: number; y1: number; color: string; hot: boolean };
 
 function scoreText(text: string, topic: string): number {
   const needle = topic.trim().toLowerCase();
@@ -422,51 +448,7 @@ function anchorsOf(page: Page, doc: { lines: DocLine[] } | undefined, topic: str
   }));
 }
 
-const THREAD_INK = ["#f6f6f1", "#ff2a2a", "#111111"] as const;
-
-function makeThreads(pages: Page[], docs: { lines: DocLine[] }[] | undefined, weave: Weave, topic: string): Thread[] {
-  if (pages.length < 2) return [];
-  const perPage = pages.map((page, index) => anchorsOf(page, docs?.[index], weave === "topic" ? topic : ""));
-  const picked = perPage.map((list) => {
-    if (list.length <= 6) return list;
-    const out: Anchor[] = [];
-    for (let i = 0; i < 6; i++) out.push(list[Math.floor((i * (list.length - 1)) / 5)]);
-    return out;
-  });
-  const out: Thread[] = [];
-  const seen = new Set<string>();
-  const push = (a: Anchor | undefined, b: Anchor | undefined, hot: boolean) => {
-    if (!a || !b || out.length >= 36) return;
-    if (Math.hypot(a.x - b.x, a.y - b.y) < 36) return;
-    const key = `${Math.round(a.x / 8)}:${Math.round(a.y / 8)}:${Math.round(b.x / 8)}:${Math.round(b.y / 8)}`;
-    if (seen.has(key)) return;
-    seen.add(key);
-    const topicHot = hot || (a.score > 0 && b.score > 0);
-    out.push({ x0: a.x, y0: a.y, x1: b.x, y1: b.y, color: THREAD_INK[out.length % 3], hot: topicHot });
-  };
-  for (let i = 0; i < picked.length - 1; i++) {
-    const left = picked[i];
-    const right = picked[i + 1];
-    const n = Math.min(left.length, right.length);
-    for (let k = 0; k < n; k++) {
-      push(left[k], right[k], false);
-      push(left[k], right[(k + 2) % n], false);
-    }
-  }
-  for (let i = 0; i < picked.length - 2; i++) {
-    const left = picked[i];
-    const far = picked[i + 2];
-    push(left[0], far[far.length - 1], true);
-    push(left[Math.min(2, left.length - 1)], far[Math.min(1, far.length - 1)], false);
-  }
-  if (picked.length > 2) {
-    const first = picked[0];
-    const last = picked[picked.length - 1];
-    push(first[0], last[last.length - 1], true);
-    push(first[first.length - 1], last[0], false);
-  }
-  return out;
-}
+const THREAD_INK = ["#ff2d2d", "#141414", "#e6c27a"] as const;
 
 export function startCrawl(opts: {
   canvas: HTMLCanvasElement;
@@ -539,7 +521,7 @@ export function startCrawl(opts: {
   let statsT = 0;
   let pageSent = -1;
   const cam = { x: 0, y: 0, s: 1, ready: false };
-  let mode: "read" | "lift" | "hold" | "cross" | "dive" | "finale" | "chaos" | "friends" = "read";
+  let mode: "read" | "lift" | "hold" | "cross" | "dive" | "finale" | "chaos" | "friends" | "spiders" = "read";
   let tween = 0;
   let hops = 2;
   let pending = 0;
@@ -553,8 +535,12 @@ export function startCrawl(opts: {
   let threadCount = 0;
   const showFor = Math.min(300, Math.max(50, opts.seconds ?? 90));
   let showT = 0;
-  const web: Thread[] = [];
-  let party: "off" | "chaos" | "friends" = "off";
+  let web: Web | null = null;
+  let webT = 0;
+  const spiders: Spider[] = [];
+  const tmpA: Pt = { x: 0, y: 0 };
+  const tmpB: Pt = { x: 0, y: 0 };
+  let party: "off" | "chaos" | "friends" | "spiders" = "off";
   const balls: Ball[] = [];
   const sparks: Spark[] = [];
   const glints: { x: number; y: number; w: number; h: number; life: number }[] = [];
@@ -587,6 +573,91 @@ export function startCrawl(opts: {
     if (pageSent !== focus) {
       pageSent = focus;
       opts.onPage(focus);
+    }
+  }
+
+  function buildWeb(): Web {
+    if (web) return web;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const page of pages) {
+      minX = Math.min(minX, page.x);
+      minY = Math.min(minY, page.y);
+      maxX = Math.max(maxX, page.x + page.w);
+      maxY = Math.max(maxY, page.y + page.h);
+    }
+    const topicMode = (opts.weave ?? "rhyme") === "topic" && (opts.topic ?? "").trim().length >= 2;
+    const perPage = pages.map((page, index) => anchorsOf(page, opts.docs?.[index], topicMode ? (opts.topic ?? "") : ""));
+    web = makeWeb({ minX, minY, maxX, maxY }, perPage, topicMode);
+    threadCount = web.total;
+    return web;
+  }
+
+  function pageAt(x: number, y: number) {
+    for (let i = 0; i < pages.length; i++) {
+      const page = pages[i];
+      if (x >= page.x - 12 && y >= page.y - 12 && x <= page.x + page.w + 12 && y <= page.y + page.h + 12) return i;
+    }
+    return -1;
+  }
+
+  function hatchFromThreads() {
+    const wb = web;
+    if (!wb) return;
+    for (const st of wb.strands) {
+      if (st.kind !== "link" || webT < st.delay + st.dur * 0.92) continue;
+      for (const node of [st.b, st.a]) {
+        const p = wb.nodes[node];
+        const pi = pageAt(p.x, p.y);
+        if (pi < 0 || agents.some((agent) => agent.page === pi)) continue;
+        const born = makeAgent(pi, pages[pi].lines);
+        born.body.x = p.x;
+        born.body.y = p.y;
+        for (const foot of born.feet) {
+          foot.x = p.x;
+          foot.y = p.y;
+        }
+        born.age = 0.2;
+        agents.push(born);
+        opts.audio.play("birth");
+        return;
+      }
+    }
+  }
+
+  function webAmp() {
+    return opts.reduced ? 0 : Math.min(9, 1.7 / camScale());
+  }
+
+  const STEP_DUR = 0.1;
+  type Walker = { body: Pt; feet: Pt[]; stepU: number[]; stepFrom: Pt[]; stepCool: number[] };
+  function stepFeet(who: Walker, targets: Pt[], dt: number, thresh: number, maxReach: number) {
+    for (let i = 0; i < who.feet.length; i++) {
+      const foot = who.feet[i];
+      const t = targets[i];
+      if (who.stepU[i] >= 0) {
+        who.stepU[i] += dt / STEP_DUR;
+        const u = Math.min(1, who.stepU[i]);
+        const e = ease(u);
+        const f = who.stepFrom[i];
+        foot.x = f.x + (t.x - f.x) * e;
+        foot.y = f.y + (t.y - f.y) * e;
+        if (u >= 1) {
+          who.stepU[i] = -1;
+          who.stepCool[i] = 0.035 + Math.random() * 0.06;
+        }
+        continue;
+      }
+      who.stepCool[i] -= dt;
+      const d = Math.hypot(t.x - foot.x, t.y - foot.y);
+      const reach = Math.hypot(foot.x - who.body.x, foot.y - who.body.y);
+      if ((d > thresh && who.stepCool[i] <= 0) || reach > maxReach || d > maxReach * 0.6) {
+        who.stepU[i] = 0;
+        who.stepFrom[i].x = foot.x;
+        who.stepFrom[i].y = foot.y;
+      }
     }
   }
 
@@ -651,12 +722,16 @@ export function startCrawl(opts: {
     const bk = 1 - Math.exp(-dt * 9);
     agent.body.x += (pose.body.x - agent.body.x) * bk;
     agent.body.y += (pose.body.y - agent.body.y) * bk;
-    const fk = 1 - Math.exp(-dt * (opts.reduced ? 7 : 12));
-    for (let i = 0; i < 8; i++) {
-      const target = pose.targets[i];
-      const foot = agent.feet[i];
-      foot.x += (target.x - foot.x) * fk;
-      foot.y += (target.y - foot.y) * fk;
+    if (opts.reduced) {
+      const fk = 1 - Math.exp(-dt * 7);
+      for (let i = 0; i < 8; i++) {
+        const target = pose.targets[i];
+        const foot = agent.feet[i];
+        foot.x += (target.x - foot.x) * fk;
+        foot.y += (target.y - foot.y) * fk;
+      }
+    } else {
+      stepFeet(agent, pose.targets, dt, 22, 340);
     }
     const desired = pose.sats.map((w, i) => ({
       x: w.x - 2,
@@ -959,9 +1034,9 @@ export function startCrawl(opts: {
 
   function fitBall(ball: Ball) {
     const page = pages[ball.page];
-    const screen = (ball.perch ? 18 : 15 + ball.bulge) * (opts.reduced ? 0.92 : 1);
+    const screen = (ball.perch ? 18 : 32 + ball.bulge * 1.6) * (opts.reduced ? 0.92 : 1);
     let r = screen / camScale();
-    if (!ball.perch && page) r = Math.min(r, Math.min(page.w, page.h) * 0.075);
+    if (!ball.perch && page) r = Math.min(r, Math.min(page.w, page.h) * 0.2);
     ball.r = r;
   }
 
@@ -993,6 +1068,9 @@ export function startCrawl(opts: {
       fromY: 0,
       landX: 0,
       landY: 0,
+      h: 0,
+      vh: 0,
+      face: 0,
     };
     fitBall(ball);
     return ball;
@@ -1012,7 +1090,7 @@ export function startCrawl(opts: {
       const speed = (ball.kind === "metal" ? 280 + Math.random() * 220 : 80 + Math.random() * 70) / s;
       sparks.push({
         x: ball.x,
-        y: ball.y,
+        y: ball.y - ball.h - ball.r * 0.4,
         vx: Math.cos(a) * speed * (Math.random() < 0.5 ? -1 : 1),
         vy: Math.sin(a) * speed,
         t: 0,
@@ -1131,16 +1209,34 @@ export function startCrawl(opts: {
     }
   }
 
+  function floorOf(page: Page, friends: boolean, r: number) {
+    return {
+      left: page.x + page.w * 0.06 + r,
+      right: page.x + page.w * 0.94 - r,
+      top: page.y + page.h * (friends ? 0.08 : 0.12),
+      bottom: page.y + page.h * (friends ? 0.9 : 0.8),
+    };
+  }
+
+  function depthOf(ball: Ball) {
+    const page = pages[ball.page];
+    if (!page) return 1;
+    const f = floorOf(page, party === "friends", 0);
+    const u = Math.max(0, Math.min(1, (ball.y - f.top) / Math.max(1, f.bottom - f.top)));
+    return 0.82 + 0.36 * u;
+  }
+
   function stepBalls(dt: number) {
     const s = camScale();
     const friends = party === "friends";
-    const g = (friends ? 1680 : 2650) / s;
-    const cap = 920 / s;
+    const g = (friends ? 1500 : 2100) / s;
+    const cap = 820 / s;
     for (let i = 0; i < balls.length; i++) {
       const ball = balls[i];
       stepLids(ball, dt);
       ball.squash = Math.max(0, ball.squash - dt * 8);
       fitBall(ball);
+      ball.face += (Math.max(-1, Math.min(1, (ball.vx * s) / 420)) - ball.face) * (1 - Math.exp(-dt * 7));
       if (ball.perch) {
         const agent = agents[ball.mate];
         if (!agent) continue;
@@ -1149,20 +1245,24 @@ export function startCrawl(opts: {
         ball.y = agent.body.y + Math.sin(agent.age * 6.2) * (2.2 / s);
         ball.vx = 0;
         ball.vy = 0;
+        ball.h = 0;
         continue;
       }
       if (ball.flight > 0) {
         const dur = 0.7;
         const was = ball.flight;
         ball.flight = Math.max(0, ball.flight - dt);
-        const u = 1 - ball.flight / dur;
-        const arc = Math.sin(Math.PI * Math.min(1, u)) * (320 / s);
-        ball.x = ball.fromX + (ball.landX - ball.fromX) * Math.min(1, u);
-        ball.y = ball.fromY + (ball.landY - ball.fromY) * Math.min(1, u) - arc;
+        const u = Math.min(1, 1 - ball.flight / dur);
+        const arc = Math.sin(Math.PI * u) * (330 / s);
+        ball.x = ball.fromX + (ball.landX - ball.fromX) * u;
+        ball.y = ball.fromY + (ball.landY - ball.fromY) * u;
+        ball.h = arc;
         ball.spin += dt * (ball.kind === "metal" ? 9 : 4);
         if (was > 0 && ball.flight === 0) {
-          ball.vy = -(ball.kind === "metal" ? 860 : 520) / s;
-          ball.vx = (ball.landX - ball.fromX) * 0.4;
+          ball.h = 0;
+          ball.vh = (ball.kind === "metal" ? 760 : 480) / s;
+          ball.vx = (ball.landX - ball.fromX) * 0.35;
+          ball.vy = (Math.random() - 0.5) * (240 / s);
           ball.squash = ball.kind === "rubber" ? 0.85 : 0.25;
           sparkBurst(ball, ball.kind === "metal" ? 8 : 4);
           opts.audio.play("bounce");
@@ -1180,24 +1280,26 @@ export function startCrawl(opts: {
           const dist = Math.hypot(dx, dy) || 1;
           if (dist > 150 / s) {
             ball.vx += (dx / dist) * (520 / s) * dt;
-            ball.vy += (dy / dist) * (180 / s) * dt;
+            ball.vy += (dy / dist) * (360 / s) * dt;
           }
         }
       }
       ball.kick -= dt;
-      const left = page.x + page.w * 0.06 + ball.r;
-      const right = page.x + page.w * 0.94 - ball.r;
-      const top = page.y + page.h * (friends ? 0.06 : 0.1) + ball.r;
-      const bottom = page.y + page.h * (friends ? 0.9 : 0.78) - ball.r;
-      if (right <= left || bottom <= top) continue;
-      if (ball.kick <= 0 && ball.y >= bottom - 14) {
-        ball.kick = (opts.reduced ? 0.7 : ball.kind === "metal" ? 0.16 : 0.28) + Math.random() * 0.22;
-        const hop = ball.kind === "metal" ? 820 + Math.random() * 340 : 460 + Math.random() * 220;
-        ball.vy = -(opts.reduced ? 280 : hop) / s;
-        ball.vx += ((Math.random() * 2 - 1) * (opts.reduced ? 80 : ball.kind === "metal" ? 520 : 280)) / s;
+      const lim = floorOf(page, friends, ball.r);
+      if (lim.right <= lim.left || lim.bottom <= lim.top) continue;
+      const grounded = ball.h <= ball.r * 0.05;
+      if (ball.kick <= 0 && grounded) {
+        ball.kick = (opts.reduced ? 0.7 : ball.kind === "metal" ? 0.2 : 0.32) + Math.random() * 0.24;
+        const hop = ball.kind === "metal" ? 620 + Math.random() * 320 : 400 + Math.random() * 240;
+        ball.vh = (opts.reduced ? 260 : hop) / s;
+        ball.vx += ((Math.random() * 2 - 1) * (opts.reduced ? 80 : ball.kind === "metal" ? 420 : 240)) / s;
+        ball.vy += ((Math.random() * 2 - 1) * (opts.reduced ? 60 : ball.kind === "metal" ? 360 : 210)) / s;
       }
-      ball.vy += g * dt;
-      ball.vx *= Math.exp(-dt * 0.45);
+      ball.vh -= g * dt;
+      ball.h += ball.vh * dt;
+      const drag = Math.exp(-dt * (grounded ? 1.5 : 0.3));
+      ball.vx *= drag;
+      ball.vy *= drag;
       const sp = Math.hypot(ball.vx, ball.vy);
       if (sp > cap) {
         ball.vx *= cap / sp;
@@ -1205,51 +1307,64 @@ export function startCrawl(opts: {
       }
       ball.x += ball.vx * dt;
       ball.y += ball.vy * dt;
-      if (ball.x < left) {
-        ball.x = left;
-        ball.vx = Math.abs(ball.vx) * (ball.kind === "metal" ? 0.96 : 0.72);
-        ball.squash = Math.min(1, (Math.abs(ball.vx) * s) / (ball.kind === "metal" ? 1100 : 520));
+      const wall = ball.kind === "metal" ? 0.94 : 0.7;
+      if (ball.x < lim.left) {
+        ball.x = lim.left;
+        ball.vx = Math.abs(ball.vx) * wall;
+        ball.squash = Math.min(1, (Math.abs(ball.vx) * s) / 700);
         if (ball.kind === "metal") sparkBurst(ball, 3);
-      } else if (ball.x > right) {
-        ball.x = right;
-        ball.vx = -Math.abs(ball.vx) * (ball.kind === "metal" ? 0.96 : 0.72);
-        ball.squash = Math.min(1, (Math.abs(ball.vx) * s) / (ball.kind === "metal" ? 1100 : 520));
+      } else if (ball.x > lim.right) {
+        ball.x = lim.right;
+        ball.vx = -Math.abs(ball.vx) * wall;
+        ball.squash = Math.min(1, (Math.abs(ball.vx) * s) / 700);
         if (ball.kind === "metal") sparkBurst(ball, 3);
       }
-      if (ball.y < top) {
-        ball.y = top;
-        ball.vy = Math.abs(ball.vy) * 0.72;
+      if (ball.y < lim.top) {
+        ball.y = lim.top;
+        ball.vy = Math.abs(ball.vy) * wall;
+      } else if (ball.y > lim.bottom) {
+        ball.y = lim.bottom;
+        ball.vy = -Math.abs(ball.vy) * wall;
       }
-      if (ball.y > bottom) {
-        const impact = ball.vy * s;
-        ball.y = bottom;
-        const bounce = ball.kind === "metal" ? 0.93 : 0.62;
-        ball.vy = -Math.abs(ball.vy) * bounce;
-        ball.vx += (Math.random() - 0.5) * (160 / s);
-        ball.squash = Math.min(1, impact / (ball.kind === "metal" ? 1400 : 480));
+      if (ball.h < 0) {
+        const impact = -ball.vh * s;
+        ball.h = 0;
+        ball.vh = -ball.vh * (ball.kind === "metal" ? 0.9 : 0.58);
+        ball.squash = Math.min(1, impact / (ball.kind === "metal" ? 1300 : 520));
         if (impact > 180) {
           opts.audio.play("bounce");
           sparkBurst(ball, ball.kind === "metal" ? 6 : 3);
         }
-        if (Math.abs(ball.vy) * s < 160) ball.kick = Math.min(ball.kick, 0.05);
+        if (ball.vh * s < 140) {
+          ball.vh = 0;
+          ball.kick = Math.min(ball.kick, 0.05);
+        }
       }
       goldTouch(ball);
       if (!friends) continue;
       const host = balls[ball.mate];
       if (!host?.perch) continue;
-      const dx = ball.x - host.x;
-      const dy = ball.y - host.y;
-      const dist = Math.hypot(dx, dy) || 1;
+      // the host is a ball riding on its crawler: treat it as a sphere resting on the floor under it
+      const hx = host.x;
+      const hy = host.y + host.r * 0.9;
+      const hz = host.r;
+      const dx = ball.x - hx;
+      const dy = ball.y - hy;
+      const dz = ball.h + ball.r - hz;
+      const dist = Math.hypot(dx, dy, dz) || 1;
       const min = ball.r + host.r * 0.92;
       if (dist >= min) continue;
       const nx = dx / dist;
       const ny = dy / dist;
-      ball.x = host.x + nx * min;
-      ball.y = host.y + ny * min;
-      const rel = ball.vx * nx + ball.vy * ny;
+      const nz = dz / dist;
+      ball.x = hx + nx * min;
+      ball.y = hy + ny * min;
+      ball.h = Math.max(0, hz + nz * min - ball.r);
+      const rel = ball.vx * nx + ball.vy * ny + ball.vh * nz;
       if (rel < 0) {
         ball.vx -= rel * 1.45 * nx;
         ball.vy -= rel * 1.45 * ny;
+        ball.vh -= rel * 1.45 * nz;
         ball.squash = 1;
         host.squash = 0.75;
         if (host.lidDir === 0) {
@@ -1269,30 +1384,36 @@ export function startCrawl(opts: {
     }
     for (let i = 0; i < balls.length; i++) {
       const a = balls[i];
-      if (a.perch) continue;
+      if (a.perch || a.flight > 0) continue;
       for (let j = i + 1; j < balls.length; j++) {
         const b = balls[j];
-        if (b.perch || a.page !== b.page) continue;
+        if (b.perch || b.flight > 0 || a.page !== b.page) continue;
         const dx = b.x - a.x;
         const dy = b.y - a.y;
+        const dz = b.h + b.r - (a.h + a.r);
         const min = a.r + b.r;
-        const d2 = dx * dx + dy * dy;
+        const d2 = dx * dx + dy * dy + dz * dz;
         if (d2 >= min * min || d2 < 0.01) continue;
         const dist = Math.sqrt(d2);
         const nx = dx / dist;
         const ny = dy / dist;
+        const nz = dz / dist;
         const push = (min - dist) * 0.5;
         a.x -= nx * push;
         a.y -= ny * push;
+        a.h = Math.max(0, a.h - nz * push);
         b.x += nx * push;
         b.y += ny * push;
-        const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny;
+        b.h = Math.max(0, b.h + nz * push);
+        const rel = (a.vx - b.vx) * nx + (a.vy - b.vy) * ny + (a.vh - b.vh) * nz;
         if (rel >= 0) continue;
         const imp = rel * 0.9;
         a.vx -= imp * nx;
         a.vy -= imp * ny;
+        a.vh -= imp * nz;
         b.vx += imp * nx;
         b.vy += imp * ny;
+        b.vh += imp * nz;
         const hit = Math.min(1, (-rel * s) / 800);
         a.squash = hit;
         b.squash = hit;
@@ -1308,12 +1429,13 @@ export function startCrawl(opts: {
       const ball = balls[i];
       const agent = agents[ball.mate];
       if (!agent || agent.flying) continue;
+      const by = ball.y - ball.h - ball.r * 0.9;
       const dx = ball.x - agent.body.x;
-      const dy = ball.y - agent.body.y;
+      const dy = by - agent.body.y;
       if (Math.hypot(dx, dy) * s > 230) continue;
       const foot = agent.feet[i % 8];
       foot.x += (ball.x - foot.x) * 0.42;
-      foot.y += (ball.y - ball.r * 0.15 - foot.y) * 0.42;
+      foot.y += (by - foot.y) * 0.42;
     }
   }
 
@@ -1333,7 +1455,17 @@ export function startCrawl(opts: {
     party = "off";
     chaos = false;
     balls.length = 0;
+    spiders.length = 0;
+    sparks.length = 0;
     releaseAgents();
+    if (frozen) {
+      const shot = overviewCam();
+      cam.x = shot.x;
+      cam.y = shot.y;
+      cam.s = shot.s;
+      mode = "finale";
+      return;
+    }
     const back = cameraTarget(focus, true);
     cam.x = back.x;
     cam.y = back.y;
@@ -1373,13 +1505,13 @@ export function startCrawl(opts: {
   }
 
   function startChaos() {
-    if (frozen) return false;
     if (party === "chaos") {
       endParty();
       return false;
     }
     party = "chaos";
     chaos = true;
+    spiders.length = 0;
     ensureSwarm(true);
     releaseAgents();
     launchChaosBalls();
@@ -1392,13 +1524,13 @@ export function startCrawl(opts: {
   }
 
   function startFriends() {
-    if (frozen) return false;
     if (party === "friends") {
       endParty();
       return false;
     }
     party = "friends";
     chaos = false;
+    spiders.length = 0;
     ensureSwarm(true);
     releaseAgents();
     launchFriendBalls();
@@ -1409,9 +1541,30 @@ export function startCrawl(opts: {
     return true;
   }
 
+  function startSpiders() {
+    if (party === "spiders") {
+      endParty();
+      return false;
+    }
+    buildWeb();
+    if (!finished && mode !== "finale") webT = Math.max(webT, 9);
+    party = "spiders";
+    chaos = true;
+    balls.length = 0;
+    sparks.length = 0;
+    ensureSwarm(true);
+    releaseAgents();
+    setTravel(overviewCam());
+    tween = 0;
+    mode = "spiders";
+    spawnSpiders();
+    opts.audio.play("gasp");
+    opts.audio.play("skitter");
+    return true;
+  }
+
   function beginTransit() {
     const next = pickNext();
-    ensureSwarm();
     setTravel(overviewCam());
     opts.audio.play("thread");
     if (next < 0) {
@@ -1419,8 +1572,7 @@ export function startCrawl(opts: {
       finaleT = 0;
       if (!finished) {
         finished = true;
-        web.push(...makeThreads(pages, opts.docs, opts.weave ?? "rhyme", opts.topic ?? ""));
-        threadCount = web.length;
+        buildWeb();
       }
       if (markOn) {
         markOn = false;
@@ -1533,47 +1685,66 @@ export function startCrawl(opts: {
     return false;
   }
 
-  function drawLeg(ctx: CanvasRenderingContext2D, body: Pt, foot: Pt, color: string, bend: number, scale: number) {
+  type LegStyle = { color: string; lift: number; stretch: number; wob: number; width: number; dark: boolean };
+  function drawLeg(ctx: CanvasRenderingContext2D, body: Pt, foot: Pt, scale: number, st: LegStyle) {
     const dx = foot.x - body.x;
     const dy = foot.y - body.y;
     const len = Math.hypot(dx, dy) || 1;
-    const nx = -dy / len;
-    const ny = dx / len;
-    const p1x = body.x + dx * 0.34 + nx * bend;
-    const p1y = body.y + dy * 0.34 + ny * bend;
-    const p2x = body.x + dx * 0.7 + nx * bend * -0.25;
-    const p2y = body.y + dy * 0.7 + ny * bend * -0.25;
+    const side = dx >= 0 ? 1 : -1;
+    // two-bone knee: the joint rises off the page, higher when the foot is mid step
+    const nx = (side * dy) / len;
+    const ny = (-side * dx) / len;
+    const slack = Math.max(0.12, 0.58 - 0.36 * st.stretch + 0.55 * st.lift);
+    const kneeH = Math.min(170, len * 0.42 * Math.sqrt((1 + slack) ** 2 - 1)) * (1 + st.wob);
+    const mx = body.x + dx * 0.5;
+    const my = body.y + dy * 0.5;
+    const kx = mx + nx * kneeH;
+    const ky = my + ny * kneeH;
+    const ax = kx + (foot.x - kx) * 0.74 - nx * kneeH * 0.14;
+    const ay = ky + (foot.y - ky) * 0.74 - ny * kneeH * 0.14;
     ctx.beginPath();
     ctx.moveTo(body.x, body.y);
-    ctx.lineTo(p1x, p1y);
-    ctx.lineTo(p2x, p2y);
+    ctx.lineTo(kx, ky);
+    ctx.lineTo(ax, ay);
     ctx.lineTo(foot.x, foot.y);
     ctx.lineJoin = "round";
     ctx.lineCap = "round";
+    if (st.dark) {
+      ctx.strokeStyle = "rgba(0,0,0,0.78)";
+      ctx.lineWidth = (st.width * 1.9) / scale;
+      ctx.stroke();
+      ctx.strokeStyle = "#2b303c";
+      ctx.lineWidth = st.width / scale;
+      ctx.stroke();
+      ctx.strokeStyle = hexA(st.color, 0.55);
+      ctx.lineWidth = (st.width * 0.32) / scale;
+      ctx.stroke();
+      return;
+    }
     ctx.strokeStyle = "rgba(0,0,0,0.72)";
     ctx.lineWidth = 4.2 / scale;
     ctx.stroke();
-    ctx.strokeStyle = color;
+    ctx.strokeStyle = st.color;
     ctx.lineWidth = 1.35 / scale;
     ctx.stroke();
     ctx.strokeStyle = "rgba(255,255,255,0.75)";
     ctx.lineWidth = 0.45 / scale;
     ctx.stroke();
     for (const [px, py, r] of [
-      [p1x, p1y, 2.15],
-      [p2x, p2y, 1.7],
-      [foot.x, foot.y, 2.5],
+      [kx, ky, 2.15],
+      [ax, ay, 1.7],
+      [foot.x, foot.y, 2.5 + st.lift * 1.2],
     ] as const) {
       ctx.beginPath();
       ctx.arc(px, py, r / scale, 0, Math.PI * 2);
       ctx.fillStyle = "#07080c";
       ctx.fill();
       ctx.lineWidth = 1.15 / scale;
-      ctx.strokeStyle = color;
+      ctx.strokeStyle = st.color;
       ctx.stroke();
       ctx.beginPath();
       ctx.arc(px, py, 0.85 / scale, 0, Math.PI * 2);
-      ctx.fillStyle = color;
+      ctx.fillStyle = st.color;
       ctx.fill();
     }
   }
@@ -1582,8 +1753,8 @@ export function startCrawl(opts: {
     const cx = box.x + box.w / 2;
     const cy = box.y + box.h / 2;
     ctx.translate(cx, cy);
-    ctx.rotate(Math.sin(tumble) * 1.05);
-    ctx.scale(Math.max(-1, Math.min(1, Math.cos(tumble))), 1);
+    ctx.rotate(tumble);
+    ctx.scale(1.45, 1.45);
     ctx.translate(-cx, -cy);
   }
 
@@ -1592,7 +1763,7 @@ export function startCrawl(opts: {
     if (tumble) axisOf(ctx, mark, tumble);
     if (dark) {
       ctx.globalCompositeOperation = "screen";
-      ctx.globalAlpha = 0.58 * alpha;
+    ctx.globalAlpha = 0.55 * alpha;
       ctx.fillStyle = color;
       ctx.fillRect(mark.x, mark.y, mark.w, mark.h);
     } else {
@@ -1609,7 +1780,6 @@ export function startCrawl(opts: {
   }
 
   function tumbleStrip(ctx: CanvasRenderingContext2D, page: Page, box: Word, tumble: number, alpha: number) {
-    if (Math.abs(Math.cos(tumble)) < 0.06) return;
     const img = page.image;
     const sx = ((box.x - page.x) / page.w) * img.naturalWidth;
     const sy = ((box.y - page.y) / page.h) * img.naturalHeight;
@@ -1649,6 +1819,37 @@ export function startCrawl(opts: {
     ctx.restore();
   }
 
+  function grokOpen(t: number) {
+    const u = (t % 4.2) / 4.2;
+    if (u < 0.05) return Math.max(0.16, u / 0.05);
+    if (u > 0.93) return Math.max(0.16, (1 - u) / 0.07);
+    return 1;
+  }
+
+  function drawGrok(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, gaze: number, open: number, alpha: number) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    const body = ctx.createRadialGradient(x - r * 0.38, y - r * 0.42, r * 0.04, x, y, r);
+    body.addColorStop(0, "#3a3a3a");
+    body.addColorStop(0.42, "#0c0c0c");
+    body.addColorStop(1, "#000");
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fillStyle = body;
+    ctx.fill();
+    const ex = x + gaze * r * 0.32;
+    const ey = y - r * 0.02;
+    const gap = r * 0.2;
+    const ew = r * 0.1;
+    const eh = Math.max(r * 0.06, r * 0.34 * open);
+    ctx.fillStyle = "#f7f8fb";
+    ctx.beginPath();
+    ctx.ellipse(ex - gap, ey, ew, eh, 0, 0, TAU);
+    ctx.ellipse(ex + gap, ey, ew, eh, 0, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function lidOpen(ball: Ball, which: 0 | 1) {
     const t = ball.wink === 1 && which === 1 ? 0 : ball.lid;
     const s = t * t * (3 - 2 * t);
@@ -1683,100 +1884,184 @@ export function startCrawl(opts: {
 
   function drawEye(ctx: CanvasRenderingContext2D, ball: Ball, ex: number, ey: number, which: 0 | 1, rx: number, ry: number) {
     const open = lidOpen(ball, which);
-    const ink = BALL_INK[ball.color];
+    const glow = ball.color === 2 ? "#d9ffe6" : "#8ff0ff";
     ctx.save();
     ctx.translate(ex, ey);
-    ctx.fillStyle = ink;
-    ctx.strokeStyle = ink;
+    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 0.4);
+    halo.addColorStop(0, hexA(glow, 0.5));
+    halo.addColorStop(1, hexA(glow, 0));
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx * 0.4, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = glow;
+    ctx.strokeStyle = glow;
     if (ball.eye === 1) {
       ctx.scale(1, Math.max(0.08, open));
-      drawStar(ctx, rx * 0.34);
+      drawStar(ctx, rx * 0.2);
       ctx.fill();
     } else if (ball.eye === 2) {
       ctx.lineCap = "round";
-      ctx.lineWidth = Math.max(rx * 0.1, 1.15 / cam.s);
-      drawRay(ctx, rx * 0.46 * Math.max(0.08, open));
+      ctx.lineWidth = Math.max(rx * 0.06, 1.1 / cam.s);
+      drawRay(ctx, rx * 0.26 * Math.max(0.08, open));
       ctx.stroke();
     } else {
-      const erx = rx * 0.2;
-      const ery = Math.max(ry * 0.3 * open, 0.55 / cam.s);
+      const erx = rx * 0.11;
+      const ery = Math.max(ry * 0.2 * open, 0.55 / cam.s);
       ctx.beginPath();
-      ctx.ellipse(0, 0, erx, ery, 0, 0, Math.PI * 2);
+      ctx.ellipse(0, 0, erx, ery, 0, 0, TAU);
       ctx.fill();
-      if (open > 0.58) {
-        ctx.fillStyle = ball.color === 1 ? "#f6f6f1" : "#101114";
-        ctx.beginPath();
-        ctx.ellipse(erx * 0.15, ery * 0.08, erx * 0.34, ery * 0.38, 0, 0, Math.PI * 2);
-        ctx.fill();
-      }
+    }
+    ctx.restore();
+  }
+
+  const BALL_TONES: Record<BallKind, [string, string, string, string][]> = {
+    metal: [
+      ["#ffffff", "#c5ccd6", "#8b94a3", "#161920"],
+      ["#fff6d6", "#e4c27a", "#a9762f", "#2a1a08"],
+      ["#ffe3d4", "#d4896c", "#8d4a33", "#240e06"],
+    ],
+    rubber: [
+      ["#707a8f", "#262a33", "#111318", "#020204"],
+      ["#ffffff", "#f3f3ee", "#bfc2cb", "#6c707b"],
+      ["#b9ffd2", "#22c55e", "#0f8a3f", "#032a14"],
+    ],
+  };
+
+  function drawBallShadow(ctx: CanvasRenderingContext2D, ball: Ball) {
+    if (ball.perch) return;
+    const R = ball.r * depthOf(ball);
+    const lift = Math.min(1, Math.max(0, ball.h) / (ball.r * 9));
+    const rx = R * (1.05 + 0.6 * lift);
+    const ry = rx * 0.34;
+    const a = 0.66 - 0.42 * lift;
+    ctx.save();
+    ctx.translate(ball.x + ball.h * 0.26, ball.y + R * 0.08);
+    ctx.scale(1, ry / rx);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    g.addColorStop(0, `rgba(0,0,0,${a})`);
+    g.addColorStop(0.5, `rgba(0,0,0,${a * 0.55})`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx, 0, TAU);
+    ctx.fill();
+    if (lift < 0.4) {
+      const core = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 0.5);
+      core.addColorStop(0, `rgba(0,0,0,${0.55 * (1 - lift / 0.4)})`);
+      core.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = core;
+      ctx.beginPath();
+      ctx.arc(0, 0, rx * 0.5, 0, TAU);
+      ctx.fill();
     }
     ctx.restore();
   }
 
   function drawBall(ctx: CanvasRenderingContext2D, ball: Ball, alpha: number) {
     const metal = ball.kind === "metal";
+    const tone = BALL_TONES[ball.kind][ball.color];
+    const ps = ball.perch ? 1 : depthOf(ball);
+    const R = ball.r * ps;
     const squash = ball.squash * (metal ? 0.45 : 1);
-    const rx = ball.r * (1 + (metal ? 0.12 : 0.42) * squash);
-    const ry = Math.max(ball.r * (metal ? 0.82 : 0.42), ball.r * (1 - (metal ? 0.16 : 0.48) * squash));
-    const look = Math.max(-1, Math.min(1, (ball.vx * cam.s) / 640));
-    const lookY = Math.max(-0.35, Math.min(0.45, (ball.vy * cam.s) / 900));
-    const drop = ry * (metal ? 0.05 : 0.16) * squash;
-    const fill = metal ? METAL[ball.color] : BALL_FILL[ball.color];
-    ctx.save();
-    ctx.globalAlpha = alpha * (metal ? 0.35 : 0.28);
-    ctx.beginPath();
-    ctx.ellipse(ball.x + rx * 0.15, ball.y + ry * 0.9, rx * 0.72, Math.max(ry * 0.16, 0.8 / cam.s), 0, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(0,0,0,0.55)";
-    ctx.fill();
-    ctx.restore();
+    const rx = R * (1 + (metal ? 0.1 : 0.34) * squash);
+    const ry = Math.max(R * 0.5, R * (1 - (metal ? 0.14 : 0.4) * squash));
+    const cx = ball.x;
+    const cy = ball.perch ? ball.y : ball.y - ball.h - ry * 0.92;
+    if (party === "chaos") {
+      drawGrok(ctx, cx, cy, Math.max(rx, ry), Math.sin(spinT * 0.85) * 0.7, opts.reduced ? 1 : grokOpen(spinT), alpha);
+      return;
+    }
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.translate(ball.x, ball.y + drop);
-    if (!ball.perch) ctx.rotate(ball.spin);
-    const body = ctx.createRadialGradient(-rx * 0.35, -ry * 0.4, rx * 0.1, 0, 0, Math.max(rx, ry));
-    if (metal) {
-      body.addColorStop(0, "#ffffff");
-      body.addColorStop(0.18, fill);
-      body.addColorStop(0.55, fill);
-      body.addColorStop(1, "#1a1c22");
-    } else {
-      body.addColorStop(0, "rgba(255,255,255,0.55)");
-      body.addColorStop(0.28, fill);
-      body.addColorStop(1, "#05060a");
-    }
+    // sphere, lit from the upper left
+    const body = ctx.createRadialGradient(cx - rx * 0.4, cy - ry * 0.48, R * 0.04, cx - rx * 0.1, cy - ry * 0.1, Math.max(rx, ry) * 1.12);
+    body.addColorStop(0, tone[0]);
+    body.addColorStop(0.2, tone[1]);
+    body.addColorStop(0.62, tone[2]);
+    body.addColorStop(1, tone[3]);
     ctx.beginPath();
-    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, TAU);
     ctx.fillStyle = body;
     ctx.fill();
-    ctx.lineWidth = (metal ? 1.1 : 2.4) / cam.s;
-    ctx.strokeStyle = metal ? "rgba(255,255,255,0.75)" : BALL_RIM[ball.color];
-    ctx.stroke();
     ctx.save();
-    ctx.beginPath();
-    ctx.ellipse(0, 0, rx, ry, 0, 0, Math.PI * 2);
     ctx.clip();
-    ctx.beginPath();
     if (metal) {
-      ctx.ellipse(-rx * 0.18, -ry * 0.22, rx * 0.46, ry * 0.18, -0.6, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(255,255,255,0.72)";
-    } else if (ball.color === 1) {
-      ctx.ellipse(0, ry * 0.36, rx * 0.48, ry * 0.2, 0, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(16,17,20,0.12)";
-    } else {
-      ctx.ellipse(-rx * 0.28, -ry * 0.34, rx * 0.24, ry * 0.15, -0.45, 0, Math.PI * 2);
-      ctx.fillStyle = "rgba(246,246,241,0.45)";
+      const env = ctx.createLinearGradient(cx, cy - ry, cx, cy + ry);
+      env.addColorStop(0, "rgba(255,255,255,0.5)");
+      env.addColorStop(0.47, "rgba(255,255,255,0.05)");
+      env.addColorStop(0.5, "rgba(255,255,255,0.7)");
+      env.addColorStop(0.53, "rgba(0,0,0,0.38)");
+      env.addColorStop(1, "rgba(0,0,0,0.05)");
+      ctx.fillStyle = env;
+      ctx.fillRect(cx - rx, cy - ry, rx * 2, ry * 2);
     }
+    // bounce light from the page underneath
+    const under = ctx.createRadialGradient(cx + rx * 0.1, cy + ry * 1.05, 0, cx + rx * 0.1, cy + ry * 1.05, ry * 0.9);
+    under.addColorStop(0, ball.color === 1 && !metal ? "rgba(90,120,170,0.3)" : "rgba(120,200,255,0.34)");
+    under.addColorStop(1, "rgba(120,200,255,0)");
+    ctx.fillStyle = under;
+    ctx.fillRect(cx - rx, cy - ry, rx * 2, ry * 2);
+    ctx.restore();
+    // cool rim on the shaded side
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx * 0.97, ry * 0.97, 0, Math.PI * 0.08, Math.PI * 0.72);
+    ctx.lineWidth = Math.max(R * 0.06, 0.8 / cam.s);
+    ctx.strokeStyle = metal ? "rgba(255,255,255,0.35)" : "rgba(140,215,255,0.45)";
+    ctx.stroke();
+    // specular
+    ctx.beginPath();
+    ctx.ellipse(cx - rx * 0.34, cy - ry * 0.42, rx * 0.26, ry * 0.15, -0.6, 0, TAU);
+    ctx.fillStyle = metal ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.5)";
     ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx - rx * 0.46, cy - ry * 0.58, R * 0.05, 0, TAU);
+    ctx.fillStyle = "rgba(255,255,255,0.95)";
+    ctx.fill();
+    // little bot head: antenna, visor, eyes. the face turns toward where it rolls
+    const f = ball.face;
+    const ff = 1 - 0.34 * Math.abs(f);
+    const off = f * rx * 0.36;
+    const wob = opts.reduced ? 0 : Math.sin(spinT * 7 + ball.page * 1.3 + ball.color) * rx * 0.07 - ball.vx * cam.s * 0.00006 * R;
+    const tipX = cx + off * 0.5 + wob;
+    const tipY = cy - ry * (1.38 + 0.1 * Math.min(1, ball.squash));
+    ctx.beginPath();
+    ctx.moveTo(cx + off * 0.3, cy - ry * 0.96);
+    ctx.quadraticCurveTo(cx + off * 0.4, cy - ry * 1.2, tipX, tipY);
+    ctx.lineWidth = Math.max(R * 0.05, 0.9 / cam.s);
+    ctx.strokeStyle = "rgba(20,22,28,0.9)";
+    ctx.lineCap = "round";
+    ctx.stroke();
+    const tip = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, R * 0.2);
+    tip.addColorStop(0, "#d8fbff");
+    tip.addColorStop(0.35, "#5ce1ff");
+    tip.addColorStop(1, "rgba(92,225,255,0)");
+    ctx.fillStyle = tip;
+    ctx.beginPath();
+    ctx.arc(tipX, tipY, R * 0.2, 0, TAU);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(cx + off, cy - ry * 0.06, rx * 0.66 * ff, ry * 0.34, 0, 0, TAU);
+    ctx.fillStyle = "rgba(4,8,16,0.9)";
+    ctx.fill();
+    ctx.lineWidth = Math.max(R * 0.03, 0.6 / cam.s);
+    ctx.strokeStyle = "rgba(140,210,255,0.4)";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(cx + off - rx * 0.1 * ff, cy - ry * 0.2, rx * 0.36 * ff, ry * 0.07, -0.08, Math.PI, TAU);
+    ctx.strokeStyle = "rgba(255,255,255,0.22)";
+    ctx.stroke();
+    const eyeY = cy - ry * 0.06;
+    const look = Math.max(-1, Math.min(1, (ball.vx * cam.s) / 640)) * rx * 0.05;
+    drawEye(ctx, ball, cx + off - rx * 0.25 * ff + look, eyeY, 0, rx, ry);
+    drawEye(ctx, ball, cx + off + rx * 0.25 * ff + look, eyeY, 1, rx, ry);
     ctx.restore();
-    ctx.restore();
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(ball.x, ball.y + drop);
-    const ox = look * rx * 0.12;
-    const oy = lookY * ry * 0.08;
-    drawEye(ctx, ball, -rx * 0.26 + ox, -ry * 0.06 + oy, 0, rx, ry);
-    drawEye(ctx, ball, rx * 0.26 + ox, -ry * 0.1 + oy, 1, rx, ry);
-    ctx.restore();
+  }
+
+  function drawBalls(ctx: CanvasRenderingContext2D) {
+    const loose = balls.filter((ball) => !ball.perch);
+    loose.sort((p, q) => p.y - q.y);
+    for (const ball of loose) drawBall(ctx, ball, 1);
   }
 
   function drawSparks(ctx: CanvasRenderingContext2D) {
@@ -1792,6 +2077,379 @@ export function startCrawl(opts: {
       ctx.stroke();
     }
     ctx.globalAlpha = 1;
+  }
+
+  // ---------- spiders that walk the web ----------
+  const spiderTargets: Pt[] = Array.from({ length: 8 }, () => ({ x: 0, y: 0 }));
+
+  function footTargets(sp: Spider, R: number) {
+    const ch = Math.cos(sp.heading);
+    const sh = Math.sin(sp.heading);
+    const fwd = [1.8, 0.7, -0.55, -1.75];
+    const lat = [2.5, 3.2, 3.3, 2.7];
+    for (let i = 0; i < 8; i++) {
+      const k = i % 4;
+      const side = i < 4 ? -1 : 1;
+      const f = fwd[k] * R * 1.1;
+      const l = lat[k] * R * side;
+      spiderTargets[i].x = sp.x + ch * f - sh * l;
+      spiderTargets[i].y = sp.y + sh * f + ch * l;
+    }
+    return spiderTargets;
+  }
+
+  function spawnSpiders() {
+    spiders.length = 0;
+    const wb = web;
+    if (!wb || !wb.strands.length) return;
+    const s = camScale();
+    const count = Math.min(9, Math.max(5, pages.length + 2));
+    for (let i = 0; i < count; i++) {
+      let edge = 0;
+      let u = 0.5;
+      let far = -1;
+      for (let tries = 0; tries < 14; tries++) {
+        const e = Math.floor(Math.random() * wb.strands.length);
+        strandPoint(wb, e, 0.5, webT, 0, tmpB);
+        let nearest = Infinity;
+        for (const other of spiders) nearest = Math.min(nearest, Math.hypot(other.x - tmpB.x, other.y - tmpB.y));
+        if (nearest > far) {
+          far = nearest;
+          edge = e;
+          u = Math.random();
+        }
+      }
+      strandPoint(wb, edge, u, webT, 0, tmpA);
+      const size = 15 + Math.random() * 7;
+      const R = size / s;
+      const sp: Spider = {
+        edge,
+        u,
+        dir: Math.random() < 0.5 ? 1 : -1,
+        speed: 120 + Math.random() * 110,
+        pause: Math.random() * 0.8,
+        size,
+        accent: LEGS[i % LEGS.length],
+        age: Math.random() * 5,
+        x: tmpA.x,
+        y: tmpA.y,
+        heading: Math.random() * TAU,
+        hop: 0,
+        hopV: 0,
+        hopWait: 1 + Math.random() * 3,
+        body: { x: tmpA.x, y: tmpA.y },
+        feet: [],
+        stepU: Array.from({ length: 8 }, () => -1),
+        stepFrom: Array.from({ length: 8 }, () => ({ x: tmpA.x, y: tmpA.y })),
+        stepCool: Array.from({ length: 8 }, (_, k) => 0.025 * k),
+      };
+      sp.feet = footTargets(sp, R).map((pt) => ({ x: pt.x, y: pt.y }));
+      spiders.push(sp);
+    }
+  }
+
+  function nextEdge(sp: Spider, node: number) {
+    const wb = web;
+    if (!wb) return;
+    const options = wb.adj[node].filter((idx) => idx !== sp.edge);
+    let pick = sp.edge;
+    let best = -Infinity;
+    // wander, but drift toward the parts of the web nobody is standing on
+    for (const idx of options) {
+      const st = wb.strands[idx];
+      const far = wb.nodes[st.a === node ? st.b : st.a];
+      let crowd = Infinity;
+      for (const other of spiders) {
+        if (other === sp) continue;
+        crowd = Math.min(crowd, Math.hypot(other.x - far.x, other.y - far.y));
+      }
+      const room = Math.min(1, crowd / Math.max(1, wb.radius * 0.35));
+      const taste = st.kind === "tie" ? 0.15 : st.kind === "link" ? 0.5 : 0.35;
+      const score = Math.random() * 0.75 + room * 0.9 + taste * Math.random();
+      if (score > best) {
+        best = score;
+        pick = idx;
+      }
+    }
+    sp.edge = pick;
+    const strand = wb.strands[pick];
+    if (strand.a === node) {
+      sp.u = 0;
+      sp.dir = 1;
+    } else {
+      sp.u = 1;
+      sp.dir = -1;
+    }
+    if (Math.random() < 0.22) sp.pause = 0.25 + Math.random() * 0.8;
+  }
+
+  function stepSpiders(dt: number) {
+    const wb = web;
+    if (!wb) return;
+    const s = camScale();
+    const amp = webAmp();
+    for (const sp of spiders) {
+      sp.age += dt;
+      const strand = wb.strands[sp.edge];
+      if (sp.pause > 0) sp.pause -= dt;
+      else {
+        sp.u += (sp.dir * ((sp.speed / s) * dt)) / Math.max(40, strand.len);
+        if (sp.u >= 1 || sp.u <= 0) {
+          const node = sp.u >= 1 ? strand.b : strand.a;
+          sp.u = Math.max(0, Math.min(1, sp.u));
+          nextEdge(sp, node);
+        }
+      }
+      strandPoint(wb, sp.edge, Math.max(0, Math.min(1, sp.u)), webT, amp, tmpA);
+      const dx = tmpA.x - sp.x;
+      const dy = tmpA.y - sp.y;
+      if (Math.hypot(dx, dy) * s > 0.12) {
+        const want = Math.atan2(dy, dx);
+        let diff = want - sp.heading;
+        while (diff > Math.PI) diff -= TAU;
+        while (diff < -Math.PI) diff += TAU;
+        sp.heading += diff * (1 - Math.exp(-dt * 9));
+      }
+      sp.x = tmpA.x;
+      sp.y = tmpA.y;
+      sp.body.x = sp.x;
+      sp.body.y = sp.y;
+      sp.hopWait -= dt;
+      if (sp.hopWait <= 0 && sp.hop <= 0 && !opts.reduced) {
+        sp.hopV = (360 + Math.random() * 220) / s;
+        sp.hopWait = 2.4 + Math.random() * 3.6;
+      }
+      if (sp.hopV !== 0 || sp.hop > 0) {
+        sp.hopV -= (1500 / s) * dt;
+        sp.hop += sp.hopV * dt;
+        if (sp.hop <= 0) {
+          sp.hop = 0;
+          sp.hopV = 0;
+        }
+      }
+      const R = sp.size / s;
+      stepFeet(sp, footTargets(sp, R), dt, R * 1.15, R * 7);
+    }
+  }
+
+  function drawSpiderShadow(ctx: CanvasRenderingContext2D, sp: Spider) {
+    const s = camScale();
+    const R = sp.size / s;
+    const lift = Math.min(1, sp.hop / (R * 5));
+    const ox = R * 0.55 + sp.hop * 0.28;
+    const oy = R * 0.5;
+    ctx.save();
+    ctx.globalAlpha = 0.34 - 0.16 * lift;
+    ctx.lineCap = "round";
+    ctx.strokeStyle = "#000";
+    ctx.lineWidth = (R * 0.2) * 1;
+    for (let i = 0; i < 8; i++) {
+      const foot = sp.feet[i];
+      ctx.beginPath();
+      ctx.moveTo(sp.x + ox, sp.y + oy);
+      ctx.lineTo(foot.x + ox * 0.7, foot.y + oy * 0.7);
+      ctx.stroke();
+    }
+    ctx.restore();
+    ctx.save();
+    ctx.translate(sp.x + ox, sp.y + oy);
+    ctx.rotate(sp.heading);
+    ctx.scale(1, 0.62);
+    const rx = R * (2.3 + 0.5 * lift);
+    const g = ctx.createRadialGradient(0, 0, 0, 0, 0, rx);
+    g.addColorStop(0, `rgba(0,0,0,${0.55 - 0.3 * lift})`);
+    g.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(0, 0, rx, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawSpider(ctx: CanvasRenderingContext2D, sp: Spider) {
+    const s = camScale();
+    const R = sp.size / s;
+    const ch = Math.cos(sp.heading);
+    const sh = Math.sin(sp.heading);
+    const bob = opts.reduced ? 0 : Math.sin(sp.age * 9) * R * 0.05;
+    const raise = R * 0.78 + sp.hop + bob;
+    const hub = { x: sp.x, y: sp.y - raise };
+    for (let i = 0; i < 8; i++) {
+      const foot = sp.feet[i];
+      const lift = sp.stepU[i] >= 0 ? Math.sin(Math.PI * Math.min(1, sp.stepU[i])) : 0;
+      const hip = { x: hub.x + ch * R * (0.9 - (i % 4) * 0.5), y: hub.y + sh * R * (0.9 - (i % 4) * 0.5) };
+      drawLeg(ctx, hip, { x: foot.x, y: foot.y - lift * R * 0.7 }, cam.s, { color: sp.accent, lift, stretch: 0, wob: 0, width: Math.max(1.6, sp.size * 0.16), dark: true });
+    }
+    const body = (bx: number, by: number, rx: number, ry: number, tone: [string, string, string]) => {
+      const g = ctx.createRadialGradient(bx - rx * 0.4, by - ry * 0.5, rx * 0.05, bx, by, Math.max(rx, ry) * 1.1);
+      g.addColorStop(0, tone[0]);
+      g.addColorStop(0.35, tone[1]);
+      g.addColorStop(1, tone[2]);
+      ctx.beginPath();
+      ctx.ellipse(bx, by, rx, ry, sp.heading, 0, TAU);
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.lineWidth = 0.9 / cam.s;
+      ctx.strokeStyle = "rgba(0,0,0,0.6)";
+      ctx.stroke();
+    };
+    const ab = { x: hub.x - ch * R * 1.2, y: hub.y - sh * R * 1.2 };
+    body(ab.x, ab.y, R * 1.35, R * 1.05, ["#5a6272", "#1b1e27", "#050609"]);
+    // glowing mark on the back
+    for (const [t, r] of [
+      [-0.2, 0.34],
+      [0.35, 0.22],
+    ] as const) {
+      ctx.beginPath();
+      ctx.ellipse(ab.x + ch * R * t, ab.y + sh * R * t, R * r, R * r * 0.7, sp.heading, 0, TAU);
+      ctx.fillStyle = hexA(sp.accent, 0.85);
+      ctx.fill();
+    }
+    body(hub.x + ch * R * 0.35, hub.y + sh * R * 0.35, R * 0.95, R * 0.8, ["#6a7384", "#242833", "#07080c"]);
+    ctx.beginPath();
+    ctx.ellipse(ab.x - R * 0.32, ab.y - R * 0.46, R * 0.5, R * 0.22, sp.heading - 0.5, 0, TAU);
+    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.fill();
+    const fx = hub.x + ch * R * 1.18;
+    const fy = hub.y + sh * R * 1.18;
+    for (const [side, size] of [
+      [-0.32, 0.2],
+      [0.32, 0.2],
+      [-0.6, 0.12],
+      [0.6, 0.12],
+    ] as const) {
+      const ex = fx - sh * R * side;
+      const ey = fy + ch * R * side;
+      const halo = ctx.createRadialGradient(ex, ey, 0, ex, ey, R * size * 2.6);
+      halo.addColorStop(0, hexA(sp.accent, 0.7));
+      halo.addColorStop(1, hexA(sp.accent, 0));
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(ex, ey, R * size * 2.6, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(ex, ey, R * size, 0, TAU);
+      ctx.fillStyle = "#f6fbff";
+      ctx.fill();
+    }
+  }
+
+  function drawWeb(ctx: CanvasRenderingContext2D) {
+    const wb = web;
+    if (!wb) return;
+    const t = webT;
+    const amp = webAmp();
+    const sc = cam.s;
+    const A = { x: 0, y: 0 };
+    const B = { x: 0, y: 0 };
+    const C = { x: 0, y: 0 };
+    const P = { x: 0, y: 0 };
+    const tips: Pt[] = [];
+    const path = (kind: "spoke" | "ring") => {
+      ctx.beginPath();
+      for (const st of wb.strands) {
+        if (st.kind !== kind) continue;
+        const p = Math.max(0, Math.min(1, (t - st.delay) / st.dur));
+        if (p <= 0) continue;
+        sway(wb.nodes[st.a], t, amp, A);
+        sway(wb.nodes[st.b], t, amp, B);
+        sway(st.c, t, amp, C);
+        const n = Math.max(1, Math.ceil(st.samples * p));
+        ctx.moveTo(A.x, A.y);
+        for (let k = 1; k <= n; k++) {
+          quadAt(A, C, B, (p * k) / n, P);
+          ctx.lineTo(P.x, P.y);
+        }
+        if (p < 1 && tips.length < 24) tips.push({ x: P.x, y: P.y });
+      }
+    };
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const kind of ["ring", "spoke"] as const) {
+      path(kind);
+      ctx.strokeStyle = "rgba(0,0,0,0.34)";
+      ctx.lineWidth = (kind === "spoke" ? 2.6 : 2.1) / sc;
+      ctx.stroke();
+      ctx.strokeStyle = kind === "spoke" ? "rgba(240,246,255,0.8)" : "rgba(226,234,252,0.62)";
+      ctx.lineWidth = (kind === "spoke" ? 1.05 : 0.8) / sc;
+      ctx.stroke();
+    }
+    // ties and links
+    for (const st of wb.strands) {
+      if (st.kind !== "tie" && st.kind !== "link") continue;
+      const p = Math.max(0, Math.min(1, (t - st.delay) / st.dur));
+      if (p <= 0) continue;
+      sway(wb.nodes[st.a], t, amp, A);
+      sway(wb.nodes[st.b], t, amp, B);
+      sway(st.c, t, amp, C);
+      const n = Math.max(2, Math.ceil(st.samples * p));
+      ctx.beginPath();
+      ctx.moveTo(A.x, A.y);
+      for (let k = 1; k <= n; k++) {
+        quadAt(A, C, B, (p * k) / n, P);
+        ctx.lineTo(P.x, P.y);
+      }
+      if (p < 1 && tips.length < 24) tips.push({ x: P.x, y: P.y });
+      if (st.kind === "tie") {
+        ctx.strokeStyle = "rgba(240,246,255,0.34)";
+        ctx.lineWidth = 0.7 / sc;
+        ctx.stroke();
+        continue;
+      }
+      const color = THREAD_INK[st.ink % 3];
+      const black = color === "#141414";
+      ctx.lineCap = "round";
+      ctx.strokeStyle = black ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.45)";
+      ctx.globalAlpha = 0.95;
+      ctx.lineWidth = (black ? 5.2 : 4.6) / sc;
+      ctx.stroke();
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = (black ? 2.4 : 2.6) / sc;
+      ctx.stroke();
+      if (p >= 1) {
+        const pin = (x: number, y: number) => {
+          const r = 6.2 / sc;
+          ctx.beginPath();
+          ctx.arc(x, y, r, 0, TAU);
+          ctx.fillStyle = "#f6f1e8";
+          ctx.fill();
+          ctx.lineWidth = 1.6 / sc;
+          ctx.strokeStyle = black ? "#f4f4f4" : color;
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(x, y, r * 0.34, 0, TAU);
+          ctx.fillStyle = black ? "#111" : color;
+          ctx.fill();
+        };
+        pin(A.x, A.y);
+        pin(B.x, B.y);
+      }
+    }
+    // dew, once the spiral is mostly in
+    if (t > 2.6) {
+      const fade = Math.min(1, (t - 2.6) / 1.2);
+      for (const d of wb.dew) {
+        sway(wb.nodes[d.node], t, amp, A);
+        const r = d.r / Math.max(0.2, sc) ** 0.6;
+        const tw = opts.reduced ? 0.8 : 0.6 + 0.4 * Math.sin(t * 2.2 + d.phase);
+        const g = ctx.createRadialGradient(A.x - r * 0.3, A.y - r * 0.35, 0, A.x, A.y, r);
+        g.addColorStop(0, `rgba(255,255,255,${0.95 * tw * fade})`);
+        g.addColorStop(0.5, `rgba(190,225,255,${0.45 * fade})`);
+        g.addColorStop(1, "rgba(120,180,255,0)");
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(A.x, A.y, r, 0, TAU);
+        ctx.fill();
+      }
+    }
+    // the thread being spun right now
+    for (const tip of tips) {
+      ctx.beginPath();
+      ctx.arc(tip.x, tip.y, 2.6 / sc, 0, TAU);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fill();
+    }
   }
 
   function draw() {
@@ -1891,38 +2549,39 @@ export function startCrawl(opts: {
       }
       ctx.restore();
     }
-    if (finished && (mode === "finale" || mode === "chaos" || mode === "friends")) {
-      for (const thread of web) {
-        ctx.beginPath();
-        ctx.moveTo(thread.x0, thread.y0);
-        ctx.lineTo(thread.x1, thread.y1);
-        ctx.lineCap = "round";
-        ctx.strokeStyle = thread.color === "#111111" ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0.55)";
-        ctx.globalAlpha = 0.9;
-        ctx.lineWidth = (thread.hot ? 4.4 : 2.8) / cam.s;
-        ctx.stroke();
-        ctx.strokeStyle = thread.color;
-        ctx.globalAlpha = thread.hot ? 1 : 0.82;
-        ctx.lineWidth = (thread.hot ? 2.1 : 1.15) / cam.s;
-        ctx.stroke();
-        ctx.globalAlpha = 1;
-        const knot = (thread.hot ? 5.2 : 3.4) / cam.s;
-        ctx.fillStyle = thread.color === "#111111" ? "#f6f6f1" : thread.color;
-        ctx.fillRect(thread.x0 - knot / 2, thread.y0 - knot / 2, knot, knot);
-        ctx.fillRect(thread.x1 - knot / 2, thread.y1 - knot / 2, knot, knot);
-      }
-    }
+    for (const ball of balls) drawBallShadow(ctx, ball);
+    for (const sp of spiders) drawSpiderShadow(ctx, sp);
+    if (web) drawWeb(ctx);
     agents.forEach((agent, ai) => {
       const page = pages[agent.page];
-      if (!page) return;
+      if (!page || party === "spiders") return;
       const pose = agent.flying || !page.lines.length ? null : poseOf(page.lines, agent, opts.dir);
       const fade = Math.min(1, agent.age / 0.28);
-      const barTurn = opts.reduced || chaos ? 0 : spinT * 1.8;
+      const barTurn = opts.reduced || chaos ? 0 : spinT * 0.95;
       const live = page.lines[agent.line];
       if (pose && live && !page.barren && !chaos) {
         const plate = { x: live.x0, y: live.y - 2, w: Math.max(24, live.x1 - live.x0), h: live.h + 4 };
         tumbleStrip(ctx, page, plate, barTurn, fade);
         fillMark(ctx, plate, pose.color, page.dark, cam.s, fade, barTurn);
+        const tied = agent.marks.slice(-3);
+        for (let i = 1; i < tied.length; i++) {
+          const a = tied[i - 1];
+          const b = tied[i];
+          const ax = a.x + a.w / 2;
+          const ay = a.y + a.h / 2;
+          const bx = b.x + b.w / 2;
+          const by = b.y + b.h / 2;
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.quadraticCurveTo((ax + bx) / 2, (ay + by) / 2 + 14, bx, by);
+          ctx.strokeStyle = b.color;
+          ctx.lineWidth = 1.7 / cam.s;
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.arc(bx, by, 3.6 / cam.s, 0, TAU);
+          ctx.fillStyle = b.color;
+          ctx.fill();
+        }
       }
       if (!page.barren && !chaos) {
         for (const mark of agent.marks) fillMark(ctx, mark, mark.color, page.dark, cam.s, mark.a * fade);
@@ -1938,60 +2597,19 @@ export function startCrawl(opts: {
         ctx.fillStyle = "rgba(255,255,255,0.92)";
         ctx.fillRect(pose.head - 1 / cam.s, pose.bar.y, 2 / cam.s, pose.bar.h);
       }
-      const stretch = opts.reduced || agent.flying || page.barren ? 0 : stretchOf(agent.age, agent.salt).amp;
-      const reach = 1 + 0.46 * stretch;
-      const body = { x: agent.body.x, y: agent.body.y - 20 * stretch };
-      for (let i = 0; i < 8; i++) {
-        const foot = agent.feet[i];
-        const placed = {
-          x: agent.body.x + (foot.x - agent.body.x) * reach,
-          y: agent.body.y + (foot.y - agent.body.y) * reach,
-        };
-        const dx = placed.x - body.x;
-        const dy = placed.y - body.y;
-        const len = Math.hypot(dx, dy) || 1;
-        const side = placed.x >= body.x ? 1 : -1;
-        const wobble = opts.reduced ? 0 : Math.sin(agent.age * 7.5 + i * 1.15) * 16;
-        const bend = side * Math.min(190, Math.max(36, len * 0.5)) * (1 + 0.2 * stretch) + wobble;
-        const color = i < 2 && pose ? pose.color : LEGS[i];
-        ctx.globalAlpha = fade;
-        drawLeg(ctx, body, placed, color, bend, cam.s);
-        ctx.globalAlpha = 1;
-      }
+      const bx = pose?.body.x ?? agent.body.x;
+      const by = (pose?.body.y ?? agent.body.y) - 8 / cam.s;
+      const gaze = Math.sin(spinT * 0.85) * 0.7;
+      drawGrok(ctx, bx, by, Math.min(56, 30 / cam.s), gaze, opts.reduced ? 1 : grokOpen(spinT), fade);
       const perch = party === "friends" ? balls[ai] : undefined;
       if (perch?.perch) {
-        perch.x = body.x;
-        perch.y = body.y + Math.sin(agent.age * 6.2) * (2.2 / camScale());
+        perch.x = bx;
+        perch.y = by;
         drawBall(ctx, perch, fade);
-      } else {
-        const hub = pose?.color ?? "#5ce1ff";
-        const grow = 1 + 0.9 * stretch;
-        const hx = (6.5 / cam.s) * grow;
-        const hy = (7.4 / cam.s) * grow;
-        ctx.globalAlpha = fade;
-        ctx.beginPath();
-        ctx.moveTo(body.x, body.y - hy);
-        ctx.lineTo(body.x + hx, body.y);
-        ctx.lineTo(body.x, body.y + hy);
-        ctx.lineTo(body.x - hx, body.y);
-        ctx.closePath();
-        ctx.fillStyle = "#07080c";
-        ctx.fill();
-        ctx.lineWidth = 1.4 / cam.s;
-        ctx.strokeStyle = hub;
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(body.x, body.y, (1.8 / cam.s) * (1 + 0.35 * stretch), 0, Math.PI * 2);
-        ctx.fillStyle = hub;
-        ctx.fill();
-        ctx.globalAlpha = 1;
       }
     });
-    for (let i = 0; i < balls.length; i++) {
-      const ball = balls[i];
-      if (ball.perch) continue;
-      drawBall(ctx, ball, 1);
-    }
+    drawBalls(ctx);
+    for (const sp of spiders) drawSpider(ctx, sp);
     drawSparks(ctx);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const g = ctx.createRadialGradient(viewW * 0.5, viewH * 0.48, viewW * 0.28, viewW * 0.5, viewH * 0.5, viewW * 0.72);
@@ -2023,20 +2641,21 @@ export function startCrawl(opts: {
   function settleFinale() {
     if (!finished) {
       finished = true;
-      web.push(...makeThreads(pages, opts.docs, opts.weave ?? "rhyme", opts.topic ?? ""));
-      threadCount = web.length;
+      buildWeb();
       ensureSwarm(true);
     }
-    party = "off";
-    chaos = false;
-    balls.length = 0;
-    sparks.length = 0;
+    webT = Math.max(webT, 9);
     glints.length = 0;
-    const shot = overviewCam();
-    cam.x = shot.x;
-    cam.y = shot.y;
-    cam.s = shot.s;
-    mode = "finale";
+    if (party === "off") {
+      balls.length = 0;
+      sparks.length = 0;
+      chaos = false;
+      const shot = overviewCam();
+      cam.x = shot.x;
+      cam.y = shot.y;
+      cam.s = shot.s;
+      mode = "finale";
+    }
     if (!frozen) {
       frozen = true;
       opts.onHold?.(true);
@@ -2056,7 +2675,9 @@ export function startCrawl(opts: {
       cam.s = target.s;
       cam.ready = true;
     }
+    if (!paused && viewW > 2) webT += dt;
     if (!paused && viewW > 2 && !frozen) {
+      hatchFromThreads();
       showT += dt;
       spinT += dt;
       for (let i = glints.length - 1; i >= 0; i--) {
@@ -2065,7 +2686,7 @@ export function startCrawl(opts: {
       }
       if (showT >= showFor) settleFinale();
     }
-    if (!paused && viewW > 2 && !frozen) {
+    if (!paused && viewW > 2 && (!frozen || party !== "off")) {
       const fast = opts.reduced;
       const paced = dt * clockPace();
       if (mode === "read") {
@@ -2111,6 +2732,12 @@ export function startCrawl(opts: {
         if (tween <= dur) tweenCam(dur);
         stepFlee(dt);
         stepBalls(dt);
+      } else if (mode === "spiders") {
+        tween += dt;
+        const dur = fast ? 0.32 : 0.8;
+        if (tween <= dur) tweenCam(dur);
+        stepSpiders(dt);
+        skitter(dt * 0.4);
       } else if (mode === "friends") {
         tween += dt;
         const dur = fast ? 0.32 : 0.7;
@@ -2141,6 +2768,7 @@ export function startCrawl(opts: {
     raf = requestAnimationFrame(frame);
   }
 
+  buildWeb();
   raf = requestAnimationFrame(frame);
   return {
     stop() {

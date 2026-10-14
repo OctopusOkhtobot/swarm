@@ -1,4 +1,5 @@
 import type { DocLine } from "./crawl";
+import { loadImage } from "./crawl";
 import { isTextPath, orderPaths, parseGithub } from "./source";
 
 export type GatheredPage = { url: string; name: string; lines: DocLine[] };
@@ -117,6 +118,41 @@ async function githubPages(input: string, startAt: string, topic: string, limit:
   return { pages, missedStart: ordered.missedStart };
 }
 
+async function openLoose(input: string, topic: string): Promise<GatheredPage> {
+  let url: URL;
+  try {
+    url = new URL(input.trim());
+  } catch {
+    throw new PageError("bad");
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") throw new PageError("bad");
+  const name = decodeURIComponent(url.pathname.split("/").pop() || url.hostname);
+  if (/\.(png|jpe?g|gif|webp|avif)(\?|$)/i.test(url.pathname)) {
+    try {
+      await loadImage(url.href);
+      return { url: url.href, name, lines: [] };
+    } catch {
+      throw new PageError("bad");
+    }
+  }
+  try {
+    const res = await fetch(url.href, { credentials: "omit" });
+    if (!res.ok) throw new PageError("bad");
+    const type = res.headers.get("content-type") ?? "";
+    if (type.startsWith("image/")) {
+      const blob = await res.blob();
+      return { url: URL.createObjectURL(blob), name, lines: [] };
+    }
+    const text = (await res.text()).slice(0, 14000);
+    const head = text.trimStart().slice(0, 20).toLowerCase();
+    if (!text.trim() || text.includes("\u0000") || head.startsWith("<!doctype") || head.startsWith("<html")) throw new PageError("bad");
+    return paintDoc(name, text, topic);
+  } catch (error) {
+    if (error instanceof PageError) throw error;
+    throw new PageError("bad");
+  }
+}
+
 export async function collectPages(opts: {
   github: string;
   startAt: string;
@@ -134,7 +170,9 @@ export async function collectPages(opts: {
     if (locals.length < 2) throw new PageError("empty");
     return { pages: locals.slice(0, limit), missedStart: false };
   }
-  const remote = await githubPages(opts.github, opts.startAt, opts.topic, limit);
+  const remote = parseGithub(opts.github)
+    ? await githubPages(opts.github, opts.startAt, opts.topic, limit)
+    : { pages: [await openLoose(opts.github, opts.topic)], missedStart: false };
   const pages = [...remote.pages, ...locals].slice(0, limit);
   if (pages.length < 2) throw new PageError("empty");
   return { pages, missedStart: remote.missedStart };

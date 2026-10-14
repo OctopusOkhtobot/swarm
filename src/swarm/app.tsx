@@ -568,6 +568,7 @@ function Stage({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const apiRef = useRef<CrawlHandle | null>(null);
+  const pickPartyRef = useRef<(kind: "bots" | "friends") => void>(() => undefined);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
   const urlKey = urls.join("|");
@@ -640,6 +641,14 @@ function Stage({
         if (!dead) setBoot(false);
       }
     })();
+    const pickParty = (kind: "bots" | "friends") => {
+      const api = apiRef.current;
+      if (!api) return;
+      const on = kind === "bots" ? api.grokbot() : api.friends();
+      setBotsOn(on && kind === "bots");
+      setFriendsOn(on && kind === "friends");
+    };
+    pickPartyRef.current = pickParty;
     const onKey = (event: KeyboardEvent) => {
       if (event.code === "Space") {
         event.preventDefault();
@@ -647,13 +656,9 @@ function Stage({
       } else if (event.key === "Escape") {
         exitRef.current();
       } else if (event.key === "g" || event.key === "G") {
-        const on = apiRef.current?.grokbot() ?? false;
-        setBotsOn(on);
-        if (on) setFriendsOn(false);
+        pickParty("bots");
       } else if (event.key === "f" || event.key === "F") {
-        const on = apiRef.current?.friends() ?? false;
-        setFriendsOn(on);
-        if (on) setBotsOn(false);
+        pickParty("friends");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -715,28 +720,10 @@ function Stage({
           {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
           {muted ? copy.mute : copy.sound}
         </button>
-        <button
-          type="button"
-          className={botsOn ? "ghost is-on" : "ghost"}
-          aria-pressed={botsOn}
-          onClick={() => {
-            const on = apiRef.current?.grokbot() ?? false;
-            setBotsOn(on);
-            if (on) setFriendsOn(false);
-          }}
-        >
+        <button type="button" className={botsOn ? "ghost is-on" : "ghost"} aria-pressed={botsOn} onClick={() => pickPartyRef.current("bots")}>
           {copy.grokbot}
         </button>
-        <button
-          type="button"
-          className={friendsOn ? "ghost is-friend" : "ghost"}
-          aria-pressed={friendsOn}
-          onClick={() => {
-            const on = apiRef.current?.friends() ?? false;
-            setFriendsOn(on);
-            if (on) setBotsOn(false);
-          }}
-        >
+        <button type="button" className={friendsOn ? "ghost is-friend" : "ghost"} aria-pressed={friendsOn} onClick={() => pickPartyRef.current("friends")}>
           {copy.friends}
         </button>
         <button type="button" className="ghost" onClick={onExit}>
