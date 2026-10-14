@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ImagePlus, Pause, Play, RotateCcw, Volume2, VolumeX, X } from "lucide-react";
+import { ImagePlus, Minus, Pause, Play, Plus, RotateCcw, Settings2, Volume2, VolumeX, X } from "lucide-react";
 import { createAudio, type SwarmAudio } from "./audio";
 import { ui, type Copy, type Lang } from "./copy";
 import { loadImage, scanImage, startCrawl, type CrawlHandle, type CrawlStats, type DocLine, type ReadDir, type Surface, type Weave } from "./crawl";
@@ -284,20 +284,20 @@ export function SwarmApp() {
             ) : null}
           </div>
 
-          <label className="field">
-            <span>
-              {copy.show} · {clockLabel(seconds)}
-            </span>
-            <input
-              type="range"
-              min={50}
-              max={300}
-              step={10}
-              value={seconds}
-              aria-label={copy.show}
-              onChange={(event) => setSeconds(Number(event.target.value))}
-            />
-          </label>
+          <section className="timer-control" aria-label={copy.show}>
+            <div className="timer-heading">
+              <span className="timer-title"><Settings2 size={15} /> {copy.show}</span>
+              <output className="timer-readout" aria-live="polite">{clockLabel(seconds)}</output>
+            </div>
+            <div className="timer-adjust">
+              <button type="button" className="timer-step" aria-label="−10" disabled={seconds <= 50} onClick={() => setSeconds((n) => Math.max(50, n - 10))}><Minus size={14} /></button>
+              <label className="timer-range">
+                <input type="range" min={50} max={300} step={10} value={seconds} aria-label={copy.show} onChange={(event) => setSeconds(Number(event.target.value))} />
+                <span className="timer-ticks" aria-hidden="true"><i /><i /><i /><i /><i /><i /></span>
+              </label>
+              <button type="button" className="timer-step" aria-label="+10" disabled={seconds >= 300} onClick={() => setSeconds((n) => Math.min(300, n + 10))}><Plus size={14} /></button>
+            </div>
+          </section>
 
           {kind === "pictures" ? (
             <div className="slots">
@@ -568,7 +568,7 @@ function Stage({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const apiRef = useRef<CrawlHandle | null>(null);
-  const pickPartyRef = useRef<(kind: "bots" | "friends") => void>(() => undefined);
+  const pickPartyRef = useRef<(kind: "bots" | "friends" | "spiders") => void>(() => undefined);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
   const urlKey = urls.join("|");
@@ -579,6 +579,7 @@ function Stage({
   const [mark, setMark] = useState(false);
   const [botsOn, setBotsOn] = useState(false);
   const [friendsOn, setFriendsOn] = useState(false);
+  const [spidersOn, setSpidersOn] = useState(false);
   const [held, setHeld] = useState(false);
 
   useEffect(() => {
@@ -593,6 +594,7 @@ function Stage({
     setMark(false);
     setBotsOn(false);
     setFriendsOn(false);
+    setSpidersOn(false);
     setHeld(false);
     void (async () => {
       try {
@@ -641,12 +643,13 @@ function Stage({
         if (!dead) setBoot(false);
       }
     })();
-    const pickParty = (kind: "bots" | "friends") => {
+    const pickParty = (kind: "bots" | "friends" | "spiders") => {
       const api = apiRef.current;
       if (!api) return;
-      const on = kind === "bots" ? api.grokbot() : api.friends();
+      const on = kind === "bots" ? api.grokbot() : kind === "friends" ? api.friends() : api.spiders();
       setBotsOn(on && kind === "bots");
       setFriendsOn(on && kind === "friends");
+      setSpidersOn(on && kind === "spiders");
     };
     pickPartyRef.current = pickParty;
     const onKey = (event: KeyboardEvent) => {
@@ -659,6 +662,8 @@ function Stage({
         pickParty("bots");
       } else if (event.key === "f" || event.key === "F") {
         pickParty("friends");
+      } else if (event.key === "s" || event.key === "S") {
+        pickParty("spiders");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -720,11 +725,14 @@ function Stage({
           {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
           {muted ? copy.mute : copy.sound}
         </button>
+        <button type="button" className={friendsOn ? "ghost is-friend" : "ghost"} aria-pressed={friendsOn} onClick={() => pickPartyRef.current("friends")}>
+          {copy.friends}
+        </button>
         <button type="button" className={botsOn ? "ghost is-on" : "ghost"} aria-pressed={botsOn} onClick={() => pickPartyRef.current("bots")}>
           {copy.grokbot}
         </button>
-        <button type="button" className={friendsOn ? "ghost is-friend" : "ghost"} aria-pressed={friendsOn} onClick={() => pickPartyRef.current("friends")}>
-          {copy.friends}
+        <button type="button" className={spidersOn ? "ghost is-spider" : "ghost"} aria-pressed={spidersOn} onClick={() => pickPartyRef.current("spiders")}>
+          {copy.spiders}
         </button>
         <button type="button" className="ghost" onClick={onExit}>
           {copy.back}

@@ -10,7 +10,7 @@ export type Surface = "void" | "table" | "photo";
 
 const TAU = Math.PI * 2;
 const LEGS = ["#5ce1ff", "#ff4ad8", "#d6ff4a", "#ffd24a", "#ff5d3a", "#c9a6ff", "#5ce1ff", "#ff4ad8"];
-const LINE_COLORS = ["#ff4ad8", "#ff8a1e", "#3dff8a", "#5ce1ff"];
+const LINE_COLORS = ["#5ce1ff", "#ff4ad8", "#d6ff4a", "#ffd24a"];
 
 type Word = Pt & { w: number; h: number };
 type Line = { y: number; h: number; x0: number; x1: number; words: Word[] };
@@ -401,7 +401,7 @@ function makeAgent(pageIndex: number, lines: Line[]): Agent {
 }
 
 export type CrawlStats = { agents: number; pages: number; lines: number; seen: number[]; threads: number; left: number };
-export type CrawlHandle = { stop: () => void; toggle: () => boolean; grokbot: () => boolean; friends: () => boolean };
+export type CrawlHandle = { stop: () => void; toggle: () => boolean; grokbot: () => boolean; friends: () => boolean; spiders: () => boolean };
 
 
 function scoreText(text: string, topic: string): number {
@@ -448,7 +448,7 @@ function anchorsOf(page: Page, doc: { lines: DocLine[] } | undefined, topic: str
   }));
 }
 
-const THREAD_INK = ["#ff2d2d", "#141414", "#e6c27a"] as const;
+const THREAD_INK = ["#f6f6f1", "#ff2a2a", "#111111"] as const;
 
 export function startCrawl(opts: {
   canvas: HTMLCanvasElement;
@@ -576,36 +576,6 @@ export function startCrawl(opts: {
     }
   }
 
-  function chosenWord() {
-    const typed = (opts.topic ?? "").trim().toLowerCase();
-    if ((opts.weave ?? "rhyme") === "topic" && typed.length >= 2) return typed;
-    const stop = new Set([
-      "the", "and", "for", "that", "with", "this", "from", "are", "was", "were", "you", "your", "not", "but",
-      "have", "has", "had", "its", "into", "about", "http", "https", "www", "com", "function", "const", "return",
-      "import", "export", "في", "من", "على", "إلى", "الى", "هذا", "هذه", "التي", "الذي", "كان", "عن", "مع",
-    ]);
-    const seen = new Map<string, number>();
-    (opts.docs ?? []).forEach((doc) => {
-      const pageWords = new Set<string>();
-      for (const line of doc.lines) {
-        const words = line.text.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [];
-        for (const word of words) {
-          if (!stop.has(word)) pageWords.add(word);
-        }
-      }
-      for (const word of pageWords) seen.set(word, (seen.get(word) ?? 0) + 1);
-    });
-    let best = "";
-    let hits = 1;
-    for (const [word, count] of seen) {
-      if (count > hits || (count === hits && word.length > best.length)) {
-        best = word;
-        hits = count;
-      }
-    }
-    return hits >= 2 ? best : "";
-  }
-
   function buildWeb(): Web {
     if (web) return web;
     let minX = Infinity;
@@ -618,69 +588,11 @@ export function startCrawl(opts: {
       maxX = Math.max(maxX, page.x + page.w);
       maxY = Math.max(maxY, page.y + page.h);
     }
-    const word = chosenWord();
-    const perPage = pages.map((page, index) => {
-      const all = anchorsOf(page, opts.docs?.[index], word);
-      const hits = word ? all.filter((anchor) => anchor.score > 0) : [];
-      const source = hits.length ? hits : all;
-      if (source.length) return source;
-      return [0.3, 0.55, 0.78].map((rel) => ({
-        x: page.x + page.w * (0.35 + rel * 0.3),
-        y: page.y + page.h * rel,
-        rel,
-        score: 0,
-      }));
-    });
-    web = makeWeb({ minX, minY, maxX, maxY }, perPage, Boolean(word));
+    const topicMode = (opts.weave ?? "rhyme") === "topic" && (opts.topic ?? "").trim().length >= 2;
+    const perPage = pages.map((page, index) => anchorsOf(page, opts.docs?.[index], topicMode ? (opts.topic ?? "") : ""));
+    web = makeWeb({ minX, minY, maxX, maxY }, perPage, topicMode);
     threadCount = web.total;
     return web;
-  }
-
-  let weaveBegun = false;
-  let weaveTick = 2.4;
-  function beginWeave() {
-    if (weaveBegun) return;
-    weaveBegun = true;
-    buildWeb();
-    if (party === "off") {
-      setTravel(overviewCam());
-      tween = 0;
-      mode = "finale";
-      finaleT = 0;
-      opts.audio.play("thread");
-    }
-  }
-
-  function pageAt(x: number, y: number) {
-    for (let i = 0; i < pages.length; i++) {
-      const page = pages[i];
-      if (x >= page.x - 12 && y >= page.y - 12 && x <= page.x + page.w + 12 && y <= page.y + page.h + 12) return i;
-    }
-    return -1;
-  }
-
-  function hatchFromThreads() {
-    const wb = web;
-    if (!wb) return;
-    for (const st of wb.strands) {
-      if (st.kind !== "link" || webT < st.delay + st.dur * 0.92) continue;
-      for (const node of [st.b, st.a]) {
-        const p = wb.nodes[node];
-        const pi = pageAt(p.x, p.y);
-        if (pi < 0 || agents.some((agent) => agent.page === pi)) continue;
-        const born = makeAgent(pi, pages[pi].lines);
-        born.body.x = p.x;
-        born.body.y = p.y;
-        for (const foot of born.feet) {
-          foot.x = p.x;
-          foot.y = p.y;
-        }
-        born.age = 0.2;
-        agents.push(born);
-        opts.audio.play("birth");
-        return;
-      }
-    }
   }
 
   function webAmp() {
@@ -1630,6 +1542,7 @@ export function startCrawl(opts: {
       if (!finished) {
         finished = true;
         buildWeb();
+        webT = 0;
       }
       if (markOn) {
         markOn = false;
@@ -1810,8 +1723,8 @@ export function startCrawl(opts: {
     const cx = box.x + box.w / 2;
     const cy = box.y + box.h / 2;
     ctx.translate(cx, cy);
-    ctx.rotate(tumble);
-    ctx.scale(1.45, 1.45);
+    ctx.rotate(Math.sin(tumble) * 1.05);
+    ctx.scale(Math.max(-1, Math.min(1, Math.cos(tumble))), 1);
     ctx.translate(-cx, -cy);
   }
 
@@ -1820,7 +1733,7 @@ export function startCrawl(opts: {
     if (tumble) axisOf(ctx, mark, tumble);
     if (dark) {
       ctx.globalCompositeOperation = "screen";
-    ctx.globalAlpha = 0.55 * alpha;
+      ctx.globalAlpha = 0.58 * alpha;
       ctx.fillStyle = color;
       ctx.fillRect(mark.x, mark.y, mark.w, mark.h);
     } else {
@@ -1837,6 +1750,7 @@ export function startCrawl(opts: {
   }
 
   function tumbleStrip(ctx: CanvasRenderingContext2D, page: Page, box: Word, tumble: number, alpha: number) {
+    if (Math.abs(Math.cos(tumble)) < 0.06) return;
     const img = page.image;
     const sx = ((box.x - page.x) / page.w) * img.naturalWidth;
     const sy = ((box.y - page.y) / page.h) * img.naturalHeight;
@@ -1857,7 +1771,7 @@ export function startCrawl(opts: {
     const sw = (word.w / page.w) * img.naturalWidth;
     const sh = (word.h / page.h) * img.naturalHeight;
     if (sw < 1 || sh < 1 || sx < -2 || sy < -2) return;
-    const sc = 1 + 0.12 * amp;
+    const sc = 1 + 0.34 * amp;
     const cx = word.x + word.w / 2;
     const cy = word.y + word.h / 2;
     ctx.save();
@@ -1873,37 +1787,6 @@ export function startCrawl(opts: {
     ctx.scale(sc, sc);
     ctx.translate(-cx, -cy);
     ctx.drawImage(img, sx, sy, sw, sh, word.x, word.y, word.w, word.h);
-    ctx.restore();
-  }
-
-  function grokOpen(t: number) {
-    const u = (t % 4.2) / 4.2;
-    if (u < 0.05) return Math.max(0.16, u / 0.05);
-    if (u > 0.93) return Math.max(0.16, (1 - u) / 0.07);
-    return 1;
-  }
-
-  function drawGrok(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, gaze: number, open: number, alpha: number) {
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    const body = ctx.createRadialGradient(x - r * 0.38, y - r * 0.42, r * 0.04, x, y, r);
-    body.addColorStop(0, "#3a3a3a");
-    body.addColorStop(0.42, "#0c0c0c");
-    body.addColorStop(1, "#000");
-    ctx.beginPath();
-    ctx.arc(x, y, r, 0, TAU);
-    ctx.fillStyle = body;
-    ctx.fill();
-    const ex = x + gaze * r * 0.32;
-    const ey = y - r * 0.02;
-    const gap = r * 0.2;
-    const ew = r * 0.1;
-    const eh = Math.max(r * 0.06, r * 0.34 * open);
-    ctx.fillStyle = "#f7f8fb";
-    ctx.beginPath();
-    ctx.ellipse(ex - gap, ey, ew, eh, 0, 0, TAU);
-    ctx.ellipse(ex + gap, ey, ew, eh, 0, 0, TAU);
-    ctx.fill();
     ctx.restore();
   }
 
@@ -2025,10 +1908,6 @@ export function startCrawl(opts: {
     const ry = Math.max(R * 0.5, R * (1 - (metal ? 0.14 : 0.4) * squash));
     const cx = ball.x;
     const cy = ball.perch ? ball.y : ball.y - ball.h - ry * 0.92;
-    if (party === "chaos") {
-      drawGrok(ctx, cx, cy, Math.max(rx, ry), Math.sin(spinT * 0.85) * 0.7, opts.reduced ? 1 : grokOpen(spinT), alpha);
-      return;
-    }
     ctx.save();
     ctx.globalAlpha = alpha;
     // sphere, lit from the upper left
@@ -2394,7 +2273,7 @@ export function startCrawl(opts: {
   function drawWeb(ctx: CanvasRenderingContext2D) {
     const wb = web;
     if (!wb) return;
-    const t = Math.max(0, Math.min(15, showT - (showFor - 15)));
+    const t = webT;
     const amp = webAmp();
     const sc = cam.s;
     const A = { x: 0, y: 0 };
@@ -2454,33 +2333,20 @@ export function startCrawl(opts: {
         continue;
       }
       const color = THREAD_INK[st.ink % 3];
-      const black = color === "#141414";
-      ctx.lineCap = "round";
-      ctx.strokeStyle = black ? "rgba(255,255,255,0.82)" : "rgba(0,0,0,0.45)";
-      ctx.globalAlpha = 0.95;
-      ctx.lineWidth = (black ? 5.2 : 4.6) / sc;
+      ctx.strokeStyle = color === "#111111" ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0.55)";
+      ctx.globalAlpha = 0.9;
+      ctx.lineWidth = (st.hot ? 4.4 : 2.8) / sc;
       ctx.stroke();
       ctx.strokeStyle = color;
-      ctx.globalAlpha = 1;
-      ctx.lineWidth = (black ? 2.4 : 2.6) / sc;
+      ctx.globalAlpha = st.hot ? 1 : 0.85;
+      ctx.lineWidth = (st.hot ? 2.1 : 1.15) / sc;
       ctx.stroke();
+      ctx.globalAlpha = 1;
       if (p >= 1) {
-        const pin = (x: number, y: number) => {
-          const r = 6.2 / sc;
-          ctx.beginPath();
-          ctx.arc(x, y, r, 0, TAU);
-          ctx.fillStyle = "#f6f1e8";
-          ctx.fill();
-          ctx.lineWidth = 1.6 / sc;
-          ctx.strokeStyle = black ? "#f4f4f4" : color;
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(x, y, r * 0.34, 0, TAU);
-          ctx.fillStyle = black ? "#111" : color;
-          ctx.fill();
-        };
-        pin(A.x, A.y);
-        pin(B.x, B.y);
+        const knot = (st.hot ? 5.2 : 3.4) / sc;
+        ctx.fillStyle = color === "#111111" ? "#f6f6f1" : color;
+        ctx.fillRect(A.x - knot / 2, A.y - knot / 2, knot, knot);
+        ctx.fillRect(B.x - knot / 2, B.y - knot / 2, knot, knot);
       }
     }
     // dew, once the spiral is mostly in
@@ -2507,6 +2373,56 @@ export function startCrawl(opts: {
       ctx.fillStyle = "rgba(255,255,255,0.95)";
       ctx.fill();
     }
+  }
+
+  function drawEvidenceThreads(ctx: CanvasRenderingContext2D) {
+    if (pages.length < 2) return;
+    const progress = Math.max(0, Math.min(1, (showT - (showFor - 20)) / 20));
+    if (progress <= 0) return;
+    const count = Math.min(pages.length - 1, 9);
+    const sc = Math.max(0.25, cam.s);
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (let i = 0; i < count; i++) {
+      const reveal = Math.max(0, Math.min(1, progress * count - i));
+      if (reveal <= 0) continue;
+      const from = pages[i];
+      const to = pages[i + 1];
+      const ax = from.x + from.w * (0.28 + ((i * 17) % 48) / 100);
+      const ay = from.y + from.h * (0.2 + ((i * 23) % 60) / 100);
+      const bx = to.x + to.w * (0.25 + ((i * 31) % 52) / 100);
+      const by = to.y + to.h * (0.18 + ((i * 19) % 64) / 100);
+      const bend = Math.sin(i * 4.7 + 0.6) * Math.hypot(bx - ax, by - ay) * 0.13;
+      const mx = (ax + bx) * 0.5 + bend * (by - ay) / Math.max(1, Math.hypot(bx - ax, by - ay));
+      const my = (ay + by) * 0.5 - bend * (bx - ax) / Math.max(1, Math.hypot(bx - ax, by - ay));
+      const ex = ax + (bx - ax) * reveal;
+      const ey = ay + (by - ay) * reveal;
+      const cx = ax + (mx - ax) * reveal;
+      const cy = ay + (my - ay) * reveal;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.quadraticCurveTo(cx, cy, ex, ey);
+      ctx.strokeStyle = "rgba(42, 5, 8, 0.65)";
+      ctx.lineWidth = 3.1 / sc;
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(197, 35, 43, 0.9)";
+      ctx.lineWidth = 1.15 / sc;
+      ctx.stroke();
+      if (reveal >= 1) {
+        for (const [x, y] of [[ax, ay], [bx, by]]) {
+          ctx.beginPath();
+          ctx.arc(x, y, 3.3 / sc, 0, TAU);
+          ctx.fillStyle = "#a91e27";
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(x, y, 1.1 / sc, 0, TAU);
+          ctx.fillStyle = "#f2c7a1";
+          ctx.fill();
+        }
+      }
+    }
+    ctx.restore();
   }
 
   function draw() {
@@ -2586,17 +2502,32 @@ export function startCrawl(opts: {
         }
       }
     }
-    for (const page of pages) {
+    for (const [index, page] of pages.entries()) {
       if (surface !== "void") {
         ctx.fillStyle = "rgba(0,0,0,0.38)";
         ctx.fillRect(page.x + 18, page.y + 22, page.w, page.h);
       }
+      const paperX = (index % 3 - 1) * 2.4;
+      const paperY = ((index * 2) % 3 - 1) * 2.2;
+      ctx.save();
+      ctx.shadowColor = "rgba(0,0,0,0.62)";
+      ctx.shadowBlur = 20 / cam.s;
+      ctx.shadowOffsetX = 8 / cam.s;
+      ctx.shadowOffsetY = 10 / cam.s;
+      ctx.fillStyle = index % 2 ? "#d8cfb9" : "#e4dbc5";
+      ctx.fillRect(page.x - 7 / cam.s + paperX / cam.s, page.y - 7 / cam.s + paperY / cam.s, page.w + 14 / cam.s, page.h + 14 / cam.s);
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = "rgba(67,52,33,0.58)";
+      ctx.lineWidth = 1 / cam.s;
+      ctx.strokeRect(page.x - 7 / cam.s + paperX / cam.s, page.y - 7 / cam.s + paperY / cam.s, page.w + 14 / cam.s, page.h + 14 / cam.s);
       ctx.drawImage(page.image, page.x, page.y, page.w, page.h);
+      ctx.restore();
       const wide = mode !== "read";
-      ctx.strokeStyle = wide ? "rgba(92,225,255,0.28)" : "rgba(255,255,255,0.08)";
-      ctx.lineWidth = (wide ? 2.2 : 1) / cam.s;
+      ctx.strokeStyle = wide ? "rgba(190,116,63,0.62)" : "rgba(222,194,153,0.3)";
+      ctx.lineWidth = (wide ? 2.2 : 1.2) / cam.s;
       ctx.strokeRect(page.x, page.y, page.w, page.h);
     }
+    drawEvidenceThreads(ctx);
     if (glints.length) {
       ctx.save();
       for (const glow of glints) {
@@ -2608,18 +2539,20 @@ export function startCrawl(opts: {
     }
     for (const ball of balls) drawBallShadow(ctx, ball);
     for (const sp of spiders) drawSpiderShadow(ctx, sp);
-    if (web && showT >= showFor - 15) drawWeb(ctx);
+    if (web && (finished || party === "spiders") && (mode === "finale" || mode === "chaos" || mode === "friends" || mode === "spiders")) drawWeb(ctx);
     agents.forEach((agent, ai) => {
       const page = pages[agent.page];
       if (!page || party === "spiders") return;
       const pose = agent.flying || !page.lines.length ? null : poseOf(page.lines, agent, opts.dir);
       const fade = Math.min(1, agent.age / 0.28);
+      const barTurn = opts.reduced || chaos ? 0 : spinT * 1.8;
       const live = page.lines[agent.line];
-      if (pose && live && !page.barren && party === "off") {
-        const plate = { x: live.x0, y: live.y - 1, w: Math.max(24, live.x1 - live.x0), h: live.h + 2 };
-        fillMark(ctx, plate, pose.color, page.dark, cam.s, fade, 0);
+      if (pose && live && !page.barren && !chaos) {
+        const plate = { x: live.x0, y: live.y - 2, w: Math.max(24, live.x1 - live.x0), h: live.h + 4 };
+        tumbleStrip(ctx, page, plate, barTurn, fade);
+        fillMark(ctx, plate, pose.color, page.dark, cam.s, fade, barTurn);
       }
-      if (!page.barren && party === "off") {
+      if (!page.barren && !chaos) {
         for (const mark of agent.marks) fillMark(ctx, mark, mark.color, page.dark, cam.s, mark.a * fade);
       }
       if (!page.barren && !chaos && !opts.reduced && !agent.flying && agent.page === focus && (mode === "read" || mode === "dive")) {
@@ -2633,63 +2566,49 @@ export function startCrawl(opts: {
         ctx.fillStyle = "rgba(255,255,255,0.92)";
         ctx.fillRect(pose.head - 1 / cam.s, pose.bar.y, 2 / cam.s, pose.bar.h);
       }
-      const hideSpider = party === "chaos";
-      if (!hideSpider) {
-        const stretch = opts.reduced || agent.flying || page.barren ? 0 : stretchOf(agent.age, agent.salt).amp;
-        const reach = 1 + 0.46 * stretch;
-        const body = { x: agent.body.x, y: agent.body.y - 20 * stretch };
-        const hub = pose?.color ?? "#5ce1ff";
-        const grow = 1 + 0.55 * stretch;
-        const limit = Math.min(page.w, page.h) * 0.075;
-        const hx = Math.min(26 / cam.s, limit) * grow;
-        const hy = Math.min(30 / cam.s, limit * 1.12) * grow;
-        for (let i = 0; i < 8; i++) {
-          const foot = agent.feet[i];
-          const placed = {
-            x: agent.body.x + (foot.x - agent.body.x) * reach,
-            y: agent.body.y + (foot.y - agent.body.y) * reach,
-          };
-          const wobble = opts.reduced ? 0 : Math.sin(agent.age * 7.5 + i * 1.15) * 0.07;
-          const lift = !opts.reduced && !agent.flying && !page.barren && agent.stepU[i] >= 0 ? Math.sin(Math.PI * Math.min(1, agent.stepU[i])) : 0;
-          const color = i < 2 && pose ? pose.color : LEGS[i];
-          const dx = placed.x - body.x;
-          const dy = placed.y - body.y;
-          const reachLen = Math.hypot(dx, dy) || 1;
-          const hip = { x: body.x + (dx / reachLen) * hx * 0.85, y: body.y + (dy / reachLen) * hy * 0.72 };
-          ctx.globalAlpha = fade;
-          drawLeg(ctx, hip, { x: placed.x, y: placed.y - (lift * 7) / cam.s }, cam.s, { color, lift, stretch, wob: wobble, width: 1.6, dark: false });
-          ctx.globalAlpha = 1;
-        }
+      const stretch = opts.reduced || agent.flying || page.barren ? 0 : stretchOf(agent.age, agent.salt).amp;
+      const reach = 1 + 0.46 * stretch;
+      const body = { x: agent.body.x, y: agent.body.y - 20 * stretch };
+      for (let i = 0; i < 8; i++) {
+        const foot = agent.feet[i];
+        const placed = {
+          x: agent.body.x + (foot.x - agent.body.x) * reach,
+          y: agent.body.y + (foot.y - agent.body.y) * reach,
+        };
+        const wobble = opts.reduced ? 0 : Math.sin(agent.age * 7.5 + i * 1.15) * 0.07;
+        const lift = !opts.reduced && !agent.flying && !page.barren && agent.stepU[i] >= 0 ? Math.sin(Math.PI * Math.min(1, agent.stepU[i])) : 0;
+        const color = i < 2 && pose ? pose.color : LEGS[i];
         ctx.globalAlpha = fade;
-        ctx.beginPath();
-        ctx.ellipse(body.x - hx * 0.35, body.y + hy * 0.05, hx * 1.15, hy * 0.95, -0.4, 0, TAU);
-        ctx.fillStyle = "#101218";
-        ctx.fill();
-        ctx.lineWidth = 1.8 / cam.s;
-        ctx.strokeStyle = hub;
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.ellipse(body.x + hx * 0.28, body.y - hy * 0.08, hx * 0.72, hy * 0.62, 0.35, 0, TAU);
-        ctx.fillStyle = "#07080c";
-        ctx.fill();
-        ctx.stroke();
-        ctx.beginPath();
-        ctx.arc(body.x + hx * 0.2, body.y - hy * 0.12, (4.2 / cam.s) * (1 + 0.2 * stretch), 0, TAU);
-        ctx.fillStyle = hub;
-        ctx.fill();
+        drawLeg(ctx, body, { x: placed.x, y: placed.y - (lift * 7) / cam.s }, cam.s, { color, lift, stretch, wob: wobble, width: 1, dark: false });
         ctx.globalAlpha = 1;
       }
       const perch = party === "friends" ? balls[ai] : undefined;
       if (perch?.perch) {
-        perch.x = agent.body.x + 22 / cam.s;
-        perch.y = agent.body.y - 46 / cam.s;
-        ctx.beginPath();
-        ctx.moveTo(agent.body.x, agent.body.y);
-        ctx.quadraticCurveTo(agent.body.x + 12 / cam.s, agent.body.y - 20 / cam.s, perch.x, perch.y);
-        ctx.strokeStyle = "rgba(255,244,220,0.8)";
-        ctx.lineWidth = 1.3 / cam.s;
-        ctx.stroke();
+        perch.x = body.x;
+        perch.y = body.y + Math.sin(agent.age * 6.2) * (2.2 / camScale());
         drawBall(ctx, perch, fade);
+      } else {
+        const hub = pose?.color ?? "#5ce1ff";
+        const grow = 1 + 0.9 * stretch;
+        const hx = (6.5 / cam.s) * grow;
+        const hy = (7.4 / cam.s) * grow;
+        ctx.globalAlpha = fade;
+        ctx.beginPath();
+        ctx.moveTo(body.x, body.y - hy);
+        ctx.lineTo(body.x + hx, body.y);
+        ctx.lineTo(body.x, body.y + hy);
+        ctx.lineTo(body.x - hx, body.y);
+        ctx.closePath();
+        ctx.fillStyle = "#07080c";
+        ctx.fill();
+        ctx.lineWidth = 1.4 / cam.s;
+        ctx.strokeStyle = hub;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(body.x, body.y, (1.8 / cam.s) * (1 + 0.35 * stretch), 0, Math.PI * 2);
+        ctx.fillStyle = hub;
+        ctx.fill();
+        ctx.globalAlpha = 1;
       }
     });
     drawBalls(ctx);
@@ -2766,16 +2685,6 @@ export function startCrawl(opts: {
       for (let i = glints.length - 1; i >= 0; i--) {
         glints[i].life -= dt;
         if (glints[i].life <= 0) glints.splice(i, 1);
-      }
-      if (showT >= showFor - 15) {
-        beginWeave();
-        if (party === "off") {
-          weaveTick -= dt;
-          if (weaveTick <= 0) {
-            opts.audio.play("thread");
-            weaveTick = 2.5;
-          }
-        }
       }
       if (showT >= showFor) settleFinale();
     }
@@ -2877,6 +2786,9 @@ export function startCrawl(opts: {
     },
     friends() {
       return startFriends();
+    },
+    spiders() {
+      return startSpiders();
     },
   };
 }

@@ -26,13 +26,13 @@ export function createAudio(): SwarmAudio {
       master = ctx.createGain();
       sfx = ctx.createGain();
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -12;
-      comp.knee.value = 10;
-      comp.ratio.value = 2.4;
+      comp.threshold.value = -17;
+      comp.knee.value = 12;
+      comp.ratio.value = 3.1;
       comp.attack.value = 0.002;
       comp.release.value = 0.12;
-      master.gain.value = isMuted ? 0 : 1;
-      sfx.gain.value = 1.55;
+      master.gain.value = isMuted ? 0 : 1.2;
+      sfx.gain.value = 1.9;
       sfx.connect(comp);
       comp.connect(master);
       master.connect(ctx.destination);
@@ -129,59 +129,64 @@ export function createAudio(): SwarmAudio {
     if (ctx.state === "suspended") void ctx.resume();
     const now = ctx.currentTime;
     if (kind === "step") {
-      if (now - lastStep < 0.055) return;
+      if (now - lastStep < 0.048) return;
       lastStep = now;
-      tone(180 + Math.random() * 40, 0.045, "sine", 0.07, 0, 90);
-      tone(920 + Math.random() * 180, 0.03, "triangle", 0.035, 0.008, 420);
+      tap(0.42);
+      tap(0.2, 0.018 + Math.random() * 0.01);
       return;
     }
     if (kind === "skitter") {
-      tone(640, 0.04, "sine", 0.05, 0, 880);
-      tone(820, 0.035, "sine", 0.04, 0.05, 540);
-      tone(500, 0.04, "triangle", 0.03, 0.09, 760);
+      tap(0.16);
+      tap(0.12, 0.03);
+      tap(0.1, 0.055 + Math.random() * 0.02);
       return;
     }
     if (kind === "stretch") {
-      tone(220, 0.22, "sine", 0.06, 0, 140);
-      tone(440, 0.16, "triangle", 0.03, 0.04, 260);
-      grit(0.18, 700, 1400, 0.08, 0.7, 0.02);
+      grit(0.26, 380, 1680, 0.32, 0.7);
+      grit(0.2, 1500, 260, 0.26, 0.85, 0.12);
+      tap(0.24, 0.02);
+      tap(0.16, 0.14);
+      tone(140, 0.18, "sine", 0.08, 0.04, 70);
       return;
     }
     if (kind === "focus") {
-      tone(660, 0.12, "sine", 0.07, 0, 880);
-      tone(990, 0.1, "triangle", 0.03, 0.03, 1320);
+      tap(0.36);
+      tap(0.22, 0.04);
+      grit(0.07, 1400, 3200, 0.14, 2.2, 0.02);
       return;
     }
     if (kind === "thread") {
-      tone(392, 0.28, "sine", 0.07, 0, 294);
-      tone(588, 0.22, "triangle", 0.035, 0.02, 392);
-      tone(784, 0.16, "sine", 0.02, 0.04, 588);
-      grit(0.12, 1800, 900, 0.04, 1.2, 0.01);
+      grit(0.28, 500, 2400, 0.22, 0.6);
+      grit(0.18, 1800, 600, 0.12, 0.8, 0.08);
       return;
     }
     if (kind === "page") {
-      grit(0.22, 240, 900, 0.1, 0.5);
-      tone(196, 0.2, "sine", 0.06, 0.02, 330);
-      tone(392, 0.14, "triangle", 0.025, 0.06, 294);
+      grit(0.32, 220, 1900, 0.3, 0.55);
+      tap(0.28, 0.02);
+      tap(0.2, 0.07);
+      tap(0.16, 0.12);
+      tone(120, 0.16, "sine", 0.07, 0, 60);
       return;
     }
     if (kind === "gasp") {
-      grit(0.16, 400, 1200, 0.08, 0.6);
-      tone(520, 0.14, "sine", 0.06, 0.02, 780);
+      grit(0.18, 320, 1600, 0.26, 0.65);
+      tone(380, 0.12, "sine", 0.18, 0.04, 720);
+      tone(610, 0.08, "triangle", 0.07, 0.07, 480);
+      tap(0.14, 0.15);
       return;
     }
     if (kind === "bounce") {
-      if (now - lastBounce < 0.05) return;
+      if (now - lastBounce < 0.042) return;
       lastBounce = now;
-      const pitch = 220 + Math.random() * 80;
-      tone(pitch, 0.09, "sine", 0.08, 0, pitch * 0.55);
-      tone(pitch * 2, 0.05, "triangle", 0.03, 0.01, pitch);
+      const pitch = 680 + Math.random() * 460;
+      tone(pitch, 0.055, "sine", 0.055, 0, pitch * 0.38);
+      tone(pitch * 1.7, 0.028, "triangle", 0.022, 0, pitch * 0.62);
+      grit(0.018, 2800, 900, 0.04, 3.4);
       return;
     }
-    tone(262, 0.16, "sine", 0.06);
-    tone(330, 0.18, "sine", 0.045, 0.04);
-    tone(392, 0.2, "triangle", 0.03, 0.08);
-    grit(0.14, 600, 1400, 0.05, 0.8, 0.02);
+    for (let i = 0; i < 5; i++) tap(0.26 - i * 0.03, i * 0.035);
+    grit(0.24, 700, 2200, 0.2, 0.8, 0.02);
+    tone(90 + Math.random() * 20, 0.28, "sine", 0.09, 0, 240);
   }
 
   return {
@@ -191,7 +196,7 @@ export function createAudio(): SwarmAudio {
     setMuted: (muted) => {
       isMuted = muted;
       if (!ctx || !master) return;
-      master.gain.setTargetAtTime(muted ? 0 : 1, ctx.currentTime, 0.02);
+      master.gain.setTargetAtTime(muted ? 0 : 1.2, ctx.currentTime, 0.02);
     },
   };
 }
