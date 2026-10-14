@@ -5,7 +5,6 @@ import { ui, type Copy, type Lang } from "./copy";
 import { loadImage, scanImage, startCrawl, type CrawlHandle, type CrawlStats, type DocLine, type ReadDir, type Surface, type Weave } from "./crawl";
 import { makeDemo } from "./demo";
 import { collectPages, PageError } from "./pages";
-import { CardSalon } from "./cards";
 
 type Shot = { url: string; name: string };
 type LocalFile = { id: string; file: File };
@@ -28,7 +27,7 @@ const MIN_BRANCH = 3;
 
 export function SwarmApp() {
   const [lang, setLang] = useState<Lang>("en");
-  const [kind, setKind] = useState<"pictures" | "pages" | "cards">("pictures");
+  const [kind, setKind] = useState<"pictures" | "pages">("pictures");
   const [main, setMain] = useState<Shot | null>(null);
   const [branches, setBranches] = useState<Shot[]>([]);
   const [readDir, setReadDir] = useState<ReadDir>("ltr");
@@ -237,7 +236,7 @@ export function SwarmApp() {
             <div>
               <p className="kicker">{copy.kicker}</p>
               <h1 className="brand">{copy.brand}</h1>
-              <p className="lead">{kind === "pages" ? copy.leadPages : kind === "cards" ? copy.leadCards : copy.lead}</p>
+              <p className="lead">{kind === "pages" ? copy.leadPages : copy.lead}</p>
             </div>
             <button type="button" className="ghost" onClick={() => setLang(lang === "ar" ? "en" : "ar")}>
               {copy.lang}
@@ -251,15 +250,8 @@ export function SwarmApp() {
             <button type="button" className={kind === "pages" ? "chip is-on" : "chip"} aria-pressed={kind === "pages"} onClick={() => setKind("pages")}>
               {copy.pagesKind}
             </button>
-            <button type="button" className={kind === "cards" ? "chip is-on" : "chip"} aria-pressed={kind === "cards"} onClick={() => setKind("cards")}>
-              {copy.cards}
-            </button>
           </div>
 
-          {kind === "cards" ? (
-            <CardSalon lang={lang} />
-          ) : (
-          <>
           <div className="read-row">
             <span>{copy.surface}</span>
             <button type="button" className={surface === "void" ? "chip is-on" : "chip"} aria-pressed={surface === "void"} onClick={() => setSurface("void")}>
@@ -472,8 +464,6 @@ export function SwarmApp() {
               {kind === "pages" ? pageNote || (pagesReady ? copy.local : copy.pageNeed) : ready ? copy.local : `${copy.need} · ${branches.length}/${MAX_BRANCH}`}
             </p>
           </div>
-          </>
-          )}
         </main>
       )}
     </div>
