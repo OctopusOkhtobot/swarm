@@ -5,6 +5,7 @@ import { ui, type Copy, type Lang } from "./copy";
 import { loadImage, scanImage, startCrawl, type CrawlHandle, type CrawlStats, type DocLine, type ReadDir, type Surface, type Weave } from "./crawl";
 import { makeDemo } from "./demo";
 import { collectPages, PageError } from "./pages";
+import { CardSalon } from "./cards";
 
 type Shot = { url: string; name: string };
 type LocalFile = { id: string; file: File };
@@ -27,7 +28,7 @@ const MIN_BRANCH = 3;
 
 export function SwarmApp() {
   const [lang, setLang] = useState<Lang>("en");
-  const [kind, setKind] = useState<"pictures" | "pages">("pictures");
+  const [kind, setKind] = useState<"pictures" | "pages" | "cards">("pictures");
   const [main, setMain] = useState<Shot | null>(null);
   const [branches, setBranches] = useState<Shot[]>([]);
   const [readDir, setReadDir] = useState<ReadDir>("ltr");
@@ -236,7 +237,7 @@ export function SwarmApp() {
             <div>
               <p className="kicker">{copy.kicker}</p>
               <h1 className="brand">{copy.brand}</h1>
-              <p className="lead">{kind === "pages" ? copy.leadPages : copy.lead}</p>
+              <p className="lead">{kind === "pages" ? copy.leadPages : kind === "cards" ? copy.leadCards : copy.lead}</p>
             </div>
             <button type="button" className="ghost" onClick={() => setLang(lang === "ar" ? "en" : "ar")}>
               {copy.lang}
@@ -250,8 +251,15 @@ export function SwarmApp() {
             <button type="button" className={kind === "pages" ? "chip is-on" : "chip"} aria-pressed={kind === "pages"} onClick={() => setKind("pages")}>
               {copy.pagesKind}
             </button>
+            <button type="button" className={kind === "cards" ? "chip is-on" : "chip"} aria-pressed={kind === "cards"} onClick={() => setKind("cards")}>
+              {copy.cards}
+            </button>
           </div>
 
+          {kind === "cards" ? (
+            <CardSalon lang={lang} />
+          ) : (
+          <>
           <div className="read-row">
             <span>{copy.surface}</span>
             <button type="button" className={surface === "void" ? "chip is-on" : "chip"} aria-pressed={surface === "void"} onClick={() => setSurface("void")}>
@@ -464,6 +472,8 @@ export function SwarmApp() {
               {kind === "pages" ? pageNote || (pagesReady ? copy.local : copy.pageNeed) : ready ? copy.local : `${copy.need} · ${branches.length}/${MAX_BRANCH}`}
             </p>
           </div>
+          </>
+          )}
         </main>
       )}
     </div>
@@ -568,7 +578,7 @@ function Stage({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const apiRef = useRef<CrawlHandle | null>(null);
-  const pickPartyRef = useRef<(kind: "bots" | "friends" | "spiders") => void>(() => undefined);
+  const pickPartyRef = useRef<(kind: "bots" | "friends") => void>(() => undefined);
   const exitRef = useRef(onExit);
   exitRef.current = onExit;
   const urlKey = urls.join("|");
@@ -579,7 +589,6 @@ function Stage({
   const [mark, setMark] = useState(false);
   const [botsOn, setBotsOn] = useState(false);
   const [friendsOn, setFriendsOn] = useState(false);
-  const [spidersOn, setSpidersOn] = useState(false);
   const [held, setHeld] = useState(false);
 
   useEffect(() => {
@@ -594,7 +603,6 @@ function Stage({
     setMark(false);
     setBotsOn(false);
     setFriendsOn(false);
-    setSpidersOn(false);
     setHeld(false);
     void (async () => {
       try {
@@ -643,13 +651,12 @@ function Stage({
         if (!dead) setBoot(false);
       }
     })();
-    const pickParty = (kind: "bots" | "friends" | "spiders") => {
+    const pickParty = (kind: "bots" | "friends") => {
       const api = apiRef.current;
       if (!api) return;
-      const on = kind === "bots" ? api.grokbot() : kind === "friends" ? api.friends() : api.spiders();
+      const on = kind === "bots" ? api.grokbot() : api.friends();
       setBotsOn(on && kind === "bots");
       setFriendsOn(on && kind === "friends");
-      setSpidersOn(on && kind === "spiders");
     };
     pickPartyRef.current = pickParty;
     const onKey = (event: KeyboardEvent) => {
@@ -662,8 +669,6 @@ function Stage({
         pickParty("bots");
       } else if (event.key === "f" || event.key === "F") {
         pickParty("friends");
-      } else if (event.key === "s" || event.key === "S") {
-        pickParty("spiders");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -730,9 +735,6 @@ function Stage({
         </button>
         <button type="button" className={botsOn ? "ghost is-on" : "ghost"} aria-pressed={botsOn} onClick={() => pickPartyRef.current("bots")}>
           {copy.grokbot}
-        </button>
-        <button type="button" className={spidersOn ? "ghost is-spider" : "ghost"} aria-pressed={spidersOn} onClick={() => pickPartyRef.current("spiders")}>
-          {copy.spiders}
         </button>
         <button type="button" className="ghost" onClick={onExit}>
           {copy.back}

@@ -1,4 +1,4 @@
-export type Sfx = "step" | "focus" | "birth" | "page" | "thread" | "stretch" | "skitter" | "gasp" | "bounce";
+export type Sfx = "step" | "focus" | "birth" | "page" | "thread" | "stretch" | "skitter" | "gasp" | "bounce" | "metal" | "rubber";
 
 export type SwarmAudio = {
   unlock: () => void;
@@ -15,6 +15,8 @@ export function createAudio(): SwarmAudio {
   let isMuted = false;
   let lastStep = 0;
   let lastBounce = 0;
+  let lastMetal = 0;
+  let lastRubber = 0;
   let bound = false;
 
   function ensure(): AudioContext | null {
@@ -26,13 +28,13 @@ export function createAudio(): SwarmAudio {
       master = ctx.createGain();
       sfx = ctx.createGain();
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -17;
+      comp.threshold.value = -15;
       comp.knee.value = 12;
-      comp.ratio.value = 3.1;
+      comp.ratio.value = 3.8;
       comp.attack.value = 0.002;
       comp.release.value = 0.12;
-      master.gain.value = isMuted ? 0 : 1.2;
-      sfx.gain.value = 1.9;
+      master.gain.value = isMuted ? 0 : 1.35;
+      sfx.gain.value = 2.15;
       sfx.connect(comp);
       comp.connect(master);
       master.connect(ctx.destination);
@@ -141,6 +143,27 @@ export function createAudio(): SwarmAudio {
       tap(0.1, 0.055 + Math.random() * 0.02);
       return;
     }
+    if (kind === "metal") {
+      if (now - lastMetal < 0.085) return;
+      lastMetal = now;
+      const pitch = 760 + Math.random() * 220;
+      tone(pitch, 0.18, "sine", 0.19, 0, pitch * 0.38);
+      tone(pitch * 1.91, 0.12, "triangle", 0.12, 0.004, pitch * 1.37);
+      tone(pitch * 2.62, 0.07, "sine", 0.045, 0.01, pitch * 1.7);
+      tone(92, 0.065, "sine", 0.11, 0, 58);
+      grit(0.027, 3600, 1050, 0.13, 3.2);
+      return;
+    }
+    if (kind === "rubber") {
+      if (now - lastRubber < 0.095) return;
+      lastRubber = now;
+      const pitch = 235 + Math.random() * 65;
+      tone(pitch, 0.12, "sine", 0.28, 0, 72 + Math.random() * 20);
+      tone(pitch * 1.8, 0.085, "triangle", 0.12, 0.012, pitch * 0.83);
+      tone(470 + Math.random() * 70, 0.055, "sine", 0.06, 0.022, 205);
+      grit(0.042, 560, 130, 0.11, 1.2);
+      return;
+    }
     if (kind === "stretch") {
       grit(0.26, 380, 1680, 0.32, 0.7);
       grit(0.2, 1500, 260, 0.26, 0.85, 0.12);
@@ -196,7 +219,7 @@ export function createAudio(): SwarmAudio {
     setMuted: (muted) => {
       isMuted = muted;
       if (!ctx || !master) return;
-      master.gain.setTargetAtTime(muted ? 0 : 1.2, ctx.currentTime, 0.02);
+      master.gain.setTargetAtTime(muted ? 0 : 1.35, ctx.currentTime, 0.02);
     },
   };
 }

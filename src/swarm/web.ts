@@ -34,19 +34,8 @@ function rand(a: number, b: number) {
   return a + Math.random() * (b - a);
 }
 
-function rayToBox(c: Pt, dx: number, dy: number, minX: number, minY: number, maxX: number, maxY: number) {
-  let t = Infinity;
-  if (dx > 1e-6) t = Math.min(t, (maxX - c.x) / dx);
-  else if (dx < -1e-6) t = Math.min(t, (minX - c.x) / dx);
-  if (dy > 1e-6) t = Math.min(t, (maxY - c.y) / dy);
-  else if (dy < -1e-6) t = Math.min(t, (minY - c.y) / dy);
-  return Number.isFinite(t) ? Math.max(0, t) : 0;
-}
-
 /**
- * A loose orb web: jittered spokes, an uneven spiral that drifts out from the hub, a ragged
- * frame, plus "link" threads that tie text lines on different pages. Everything shares nodes,
- * so the result is a graph the spiders can walk.
+ * Restrained concentric perimeter loops with hidden page-link strands retained for spider navigation.
  */
 export function makeWeb(
   bounds: { minX: number; minY: number; maxX: number; maxY: number },
@@ -98,75 +87,34 @@ export function makeWeb(
     adj[b].push(strands.length - 1);
   };
 
-  const spokeCount = Math.round(rand(13, 18));
-  const turns = Math.round(rand(9, 12));
+  const pointsPerRing = Math.round(rand(16, 20));
   const offset = rand(0, TAU);
   const radius = Math.hypot(w, h) / 2;
 
-  // spokes: uneven angles, ends land on the outer frame
-  const angles: number[] = [];
-  for (let i = 0; i < spokeCount; i++) {
-    angles.push(offset + (i / spokeCount) * TAU + rand(-0.42, 0.42) * (TAU / spokeCount));
-  }
-  angles.sort((x, y) => x - y);
-  const ends: Pt[] = angles.map((ang) => {
-    const dx = Math.cos(ang);
-    const dy = Math.sin(ang);
-    const t = rayToBox(center, dx, dy, minX, minY, maxX, maxY) * rand(0.9, 1);
-    return { x: center.x + dx * t, y: center.y + dy * t };
-  });
-
-  // spiral: one continuous drift outward, hopping spoke to spoke
-  const spokeNodes: { f: number; node: number }[][] = Array.from({ length: spokeCount }, () => []);
-  const spiral: number[] = [];
-  const total = spokeCount * turns;
-  for (let t = 0; t < total; t++) {
-    const j = t % spokeCount;
-    const base = 0.065 + 0.9 * (t / total) ** 0.92;
-    const f = Math.min(0.97, Math.max(0.05, base + rand(-0.018, 0.018)));
-    const end = ends[j];
-    // nudge nodes a little off the spoke line so the rings stop looking ruled
-    const jx = rand(-1, 1) * 10;
-    const jy = rand(-1, 1) * 10;
-    const node = addNode({ x: center.x + (end.x - center.x) * f + jx, y: center.y + (end.y - center.y) * f + jy });
-    spokeNodes[j].push({ f, node });
-    spiral.push(node);
+  // Sparse, uneven concentric perimeter loops; leave the center and page-to-page links clear.
+  const ringCount = 5;
+  for (let ring = 0; ring < ringCount; ring++) {
+    const radius = 0.56 + (ring / (ringCount - 1)) * 0.39;
+    const ids: number[] = [];
+    const phase = offset + ring * 0.16;
+    for (let j = 0; j < pointsPerRing; j++) {
+      const angle = phase + (j / pointsPerRing) * TAU;
+      const jitter = rand(-0.012, 0.012);
+      ids.push(addNode({
+        x: center.x + Math.cos(angle) * (maxX - minX) * (radius + jitter) * 0.5,
+        y: center.y + Math.sin(angle) * (maxY - minY) * (radius + jitter) * 0.5,
+      }));
+    }
+    for (let j = 0; j < ids.length; j++) {
+      if (Math.random() < 0.045) continue;
+      addStrand("ring", ids[j], ids[(j + 1) % ids.length], rand(0.012, 0.035), 0.3 + ring * 0.38 + j * 0.012, 0.35, false, (ring + j) % 2);
+    }
   }
 
-  // spokes (hub -> each node in order -> frame)
-  const endNodes: number[] = [];
-  for (let j = 0; j < spokeCount; j++) {
-    const list = spokeNodes[j].sort((p, q) => p.f - q.f);
-    const endNode = addNode({ ...ends[j] });
-    endNodes.push(endNode);
-    let prev = 0;
-    const d0 = rand(0, 0.7);
-    list.forEach((item, idx) => {
-      addStrand("spoke", prev, item.node, rand(-0.012, 0.012), d0 + idx * 0.05, 0.5);
-      prev = item.node;
-    });
-    addStrand("spoke", prev, endNode, rand(-0.012, 0.012), d0 + list.length * 0.05, 0.5);
-  }
-
-  // spiral strands (some gaps, some torn)
-  for (let t = 1; t < spiral.length; t++) {
-    if (Math.random() < 0.07) continue;
-    addStrand("ring", spiral[t - 1], spiral[t], rand(0.035, 0.1), 0.8 + (t / total) * 2.8, 0.2);
-  }
-  // ragged frame
-  for (let j = 0; j < spokeCount; j++) {
-    if (Math.random() < 0.16) continue;
-    addStrand("ring", endNodes[j], endNodes[(j + 1) % spokeCount], rand(0.02, 0.07), 0.4 + j * 0.05, 0.4);
-  }
-
-  // dew
+  // No dew drops or central webbing on the restrained perimeter motif.
   const dew: Dew[] = [];
-  const dewCount = Math.min(30, Math.round(spiral.length * 0.14));
-  for (let i = 0; i < dewCount; i++) {
-    dew.push({ node: spiral[Math.floor(Math.random() * spiral.length)], r: rand(2.4, 4.6), phase: rand(0, TAU) });
-  }
 
-  // link threads between the pages' own lines
+  // Link strands remain in the model for crawl navigation, but are not rendered in the finale.
   const nearestWeb = (p: Pt, skip: number) => {
     let best = -1;
     let bestD = Infinity;

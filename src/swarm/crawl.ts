@@ -67,11 +67,9 @@ type Ball = {
   page: number;
   mate: number;
   perch: boolean;
-  eye: 0 | 1 | 2;
   lid: number;
   lidDir: number;
   lidWait: number;
-  wink: number;
   kick: number;
   spin: number;
   bulge: number;
@@ -83,6 +81,8 @@ type Ball = {
   h: number;
   vh: number;
   face: number;
+  trail: Pt[];
+  trailClock: number;
 };
 
 type Spider = {
@@ -448,7 +448,7 @@ function anchorsOf(page: Page, doc: { lines: DocLine[] } | undefined, topic: str
   }));
 }
 
-const THREAD_INK = ["#f6f6f1", "#ff2a2a", "#111111"] as const;
+const THREAD_INK = ["#c52825", "#171717"] as const;
 
 export function startCrawl(opts: {
   canvas: HTMLCanvasElement;
@@ -1002,7 +1002,7 @@ export function startCrawl(opts: {
 
   function fitBall(ball: Ball) {
     const page = pages[ball.page];
-    const screen = (ball.perch ? 18 : 32 + ball.bulge * 1.6) * (opts.reduced ? 0.92 : 1);
+    const screen = (ball.perch ? 16.5 : 29 + ball.bulge * 1.4) * (opts.reduced ? 0.92 : 1);
     let r = screen / camScale();
     if (!ball.perch && page) r = Math.min(r, Math.min(page.w, page.h) * 0.2);
     ball.r = r;
@@ -1023,11 +1023,9 @@ export function startCrawl(opts: {
       page: pageIndex,
       mate: 0,
       perch,
-      eye: perch ? (i % 2 === 0 ? 1 : 2) : 0,
       lid: 0,
       lidDir: 0,
       lidWait: 0.6 + (i % 5) * 0.35,
-      wink: 0,
       kick: 0.12 + (i % 4) * 0.08,
       spin: i * 0.4,
       bulge: (i % 3) * 1.6,
@@ -1039,6 +1037,8 @@ export function startCrawl(opts: {
       h: 0,
       vh: 0,
       face: 0,
+      trail: [],
+      trailClock: 0,
     };
     fitBall(ball);
     return ball;
@@ -1078,6 +1078,8 @@ export function startCrawl(opts: {
       ball.x = ball.fromX;
       ball.y = ball.fromY;
       ball.kind = i % 2 === 0 ? "metal" : "rubber";
+      ball.trail.length = 0;
+      ball.trailClock = 0;
       ball.flight = 0.7;
       if (page) {
         ball.landX = page.x + page.w * (0.22 + ((i * 2) % 5) * 0.12);
@@ -1097,7 +1099,6 @@ export function startCrawl(opts: {
     for (let i = 0; i < count; i++) {
       const ball = makeBall(i, false);
       ball.page = i % pages.length;
-      ball.eye = 0;
       fitBall(ball);
       balls.push(ball);
       made.push(ball);
@@ -1113,7 +1114,6 @@ export function startCrawl(opts: {
       const agent = agents[i];
       ball.mate = i;
       ball.page = agent.page;
-      ball.eye = i % 2 === 0 ? 1 : 2;
       ball.kind = "rubber";
       ball.x = agent.body.x;
       ball.y = agent.body.y;
@@ -1126,7 +1126,6 @@ export function startCrawl(opts: {
       const ball = makeBall(i + 2, false);
       const agent = agents[i % agents.length];
       ball.mate = i % agents.length;
-      ball.eye = 0;
       ball.perch = false;
       ball.page = agent?.page ?? 0;
       fitBall(ball);
@@ -1161,7 +1160,6 @@ export function startCrawl(opts: {
       ball.lidWait -= dt;
       if (ball.lidWait <= 0) {
         ball.lidDir = 1;
-        ball.wink = Math.random() < 0.2 ? 1 : 0;
       }
       return;
     }
@@ -1172,7 +1170,6 @@ export function startCrawl(opts: {
     } else if (ball.lid <= 0) {
       ball.lid = 0;
       ball.lidDir = 0;
-      ball.wink = 0;
       ball.lidWait = Math.random() < 0.16 ? 0.1 : 1.5 + Math.random() * 2.4;
     }
   }
@@ -1192,6 +1189,28 @@ export function startCrawl(opts: {
     const f = floorOf(page, party === "friends", 0);
     const u = Math.max(0, Math.min(1, (ball.y - f.top) / Math.max(1, f.bottom - f.top)));
     return 0.82 + 0.36 * u;
+  }
+
+  function recordBallTrails(dt: number) {
+    const s = camScale();
+    for (const ball of balls) {
+      if (ball.perch) {
+        ball.trail.length = 0;
+        continue;
+      }
+      ball.trailClock += dt;
+      if (ball.trailClock < 0.032) continue;
+      ball.trailClock = 0;
+      const point = { x: ball.x, y: ball.y - ball.h - ball.r * 0.7 };
+      const last = ball.trail[0];
+      if (last && Math.hypot(point.x - last.x, point.y - last.y) < 10 / s) continue;
+      ball.trail.unshift(point);
+      if (ball.trail.length > 10) ball.trail.pop();
+    }
+  }
+
+  function ballImpact(ball: Ball) {
+    opts.audio.play(ball.kind === "metal" ? "metal" : "rubber");
   }
 
   function stepBalls(dt: number) {
@@ -1227,13 +1246,15 @@ export function startCrawl(opts: {
         ball.h = arc;
         ball.spin += dt * (ball.kind === "metal" ? 9 : 4);
         if (was > 0 && ball.flight === 0) {
+          ball.trail.length = 0;
+          ball.trailClock = 0;
           ball.h = 0;
           ball.vh = (ball.kind === "metal" ? 760 : 480) / s;
           ball.vx = (ball.landX - ball.fromX) * 0.35;
           ball.vy = (Math.random() - 0.5) * (240 / s);
           ball.squash = ball.kind === "rubber" ? 0.85 : 0.25;
           sparkBurst(ball, ball.kind === "metal" ? 8 : 4);
-          opts.audio.play("bounce");
+          ballImpact(ball);
         }
         continue;
       }
@@ -1300,7 +1321,7 @@ export function startCrawl(opts: {
         ball.vh = -ball.vh * (ball.kind === "metal" ? 0.9 : 0.58);
         ball.squash = Math.min(1, impact / (ball.kind === "metal" ? 1300 : 520));
         if (impact > 180) {
-          opts.audio.play("bounce");
+          ballImpact(ball);
           sparkBurst(ball, ball.kind === "metal" ? 6 : 3);
         }
         if (ball.vh * s < 140) {
@@ -1337,9 +1358,8 @@ export function startCrawl(opts: {
         host.squash = 0.75;
         if (host.lidDir === 0) {
           host.lidDir = 1;
-          host.wink = 0;
         }
-        if (-rel * s > 180) opts.audio.play("bounce");
+        if (-rel * s > 180) ballImpact(ball);
       }
     }
     for (let i = sparks.length - 1; i >= 0; i--) {
@@ -1385,9 +1405,10 @@ export function startCrawl(opts: {
         const hit = Math.min(1, (-rel * s) / 800);
         a.squash = hit;
         b.squash = hit;
-        if (-rel * s > 200) opts.audio.play("bounce");
+        if (-rel * s > 200) ballImpact(a);
       }
     }
+    recordBallTrails(dt);
   }
 
   function lendFeet() {
@@ -1432,6 +1453,7 @@ export function startCrawl(opts: {
       cam.y = shot.y;
       cam.s = shot.s;
       mode = "finale";
+      if (finished && !spiders.length) spawnSpiders();
       return;
     }
     const back = cameraTarget(focus, true);
@@ -1681,29 +1703,42 @@ export function startCrawl(opts: {
     ctx.lineCap = "round";
     if (st.dark) {
       ctx.strokeStyle = "rgba(0,0,0,0.78)";
-      ctx.lineWidth = (st.width * 1.9) / scale;
+      ctx.lineWidth = (st.width * 2.05) / scale;
       ctx.stroke();
-      ctx.strokeStyle = "#2b303c";
-      ctx.lineWidth = st.width / scale;
+      ctx.strokeStyle = "#343a35";
+      ctx.lineWidth = (st.width * 1.15) / scale;
       ctx.stroke();
       ctx.strokeStyle = hexA(st.color, 0.55);
       ctx.lineWidth = (st.width * 0.32) / scale;
       ctx.stroke();
+      for (const [px, py, r] of [[kx, ky, 2.8], [ax, ay, 2.15], [foot.x, foot.y, 3.1 + st.lift * 1.1]] as const) {
+        ctx.beginPath();
+        ctx.arc(px, py, r / scale, 0, TAU);
+        ctx.fillStyle = "#121713";
+        ctx.fill();
+        ctx.lineWidth = 1.35 / scale;
+        ctx.strokeStyle = st.color;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(px, py, 0.8 / scale, 0, TAU);
+        ctx.fillStyle = "#e8cf91";
+        ctx.fill();
+      }
       return;
     }
     ctx.strokeStyle = "rgba(0,0,0,0.72)";
-    ctx.lineWidth = 4.2 / scale;
+    ctx.lineWidth = 5.2 / scale;
     ctx.stroke();
     ctx.strokeStyle = st.color;
-    ctx.lineWidth = 1.35 / scale;
+    ctx.lineWidth = 1.85 / scale;
     ctx.stroke();
     ctx.strokeStyle = "rgba(255,255,255,0.75)";
     ctx.lineWidth = 0.45 / scale;
     ctx.stroke();
     for (const [px, py, r] of [
-      [kx, ky, 2.15],
-      [ax, ay, 1.7],
-      [foot.x, foot.y, 2.5 + st.lift * 1.2],
+      [kx, ky, 2.8],
+      [ax, ay, 2.1],
+      [foot.x, foot.y, 3.2 + st.lift * 1.4],
     ] as const) {
       ctx.beginPath();
       ctx.arc(px, py, r / scale, 0, Math.PI * 2);
@@ -1790,81 +1825,38 @@ export function startCrawl(opts: {
     ctx.restore();
   }
 
-  function lidOpen(ball: Ball, which: 0 | 1) {
-    const t = ball.wink === 1 && which === 1 ? 0 : ball.lid;
+  function lidOpen(ball: Ball) {
+    const t = ball.lid;
     const s = t * t * (3 - 2 * t);
     return 0.07 + 0.93 * (1 - s);
   }
 
-  function drawStar(ctx: CanvasRenderingContext2D, r: number) {
-    ctx.beginPath();
-    for (let k = 0; k < 10; k++) {
-      const rad = k % 2 === 0 ? r : r * 0.42;
-      const a = -Math.PI / 2 + (k * Math.PI) / 5;
-      const x = Math.cos(a) * rad;
-      const y = Math.sin(a) * rad;
-      if (k === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
-    ctx.closePath();
-  }
-
-  function drawRay(ctx: CanvasRenderingContext2D, r: number) {
-    ctx.beginPath();
-    ctx.moveTo(-r, 0);
-    ctx.lineTo(r, 0);
-    ctx.moveTo(0, -r);
-    ctx.lineTo(0, r);
-    const d = r * 0.62;
-    ctx.moveTo(-d, -d);
-    ctx.lineTo(d, d);
-    ctx.moveTo(d, -d);
-    ctx.lineTo(-d, d);
-  }
-
-  function drawEye(ctx: CanvasRenderingContext2D, ball: Ball, ex: number, ey: number, which: 0 | 1, rx: number, ry: number) {
-    const open = lidOpen(ball, which);
-    const glow = ball.color === 2 ? "#d9ffe6" : "#8ff0ff";
+  function drawEye(ctx: CanvasRenderingContext2D, ball: Ball, ex: number, ey: number, rx: number, ry: number) {
+    const open = lidOpen(ball);
     ctx.save();
     ctx.translate(ex, ey);
-    const halo = ctx.createRadialGradient(0, 0, 0, 0, 0, rx * 0.4);
-    halo.addColorStop(0, hexA(glow, 0.5));
-    halo.addColorStop(1, hexA(glow, 0));
-    ctx.fillStyle = halo;
+    const ew = rx * 0.13;
+    const eh = Math.max(ry * 0.32 * open, 0.72 / cam.s);
     ctx.beginPath();
-    ctx.arc(0, 0, rx * 0.4, 0, TAU);
+    ctx.roundRect(-ew, -eh, ew * 2, eh * 2, Math.min(ew, eh) * 0.72);
+    ctx.fillStyle = "#101412";
     ctx.fill();
-    ctx.fillStyle = glow;
-    ctx.strokeStyle = glow;
-    if (ball.eye === 1) {
-      ctx.scale(1, Math.max(0.08, open));
-      drawStar(ctx, rx * 0.2);
-      ctx.fill();
-    } else if (ball.eye === 2) {
-      ctx.lineCap = "round";
-      ctx.lineWidth = Math.max(rx * 0.06, 1.1 / cam.s);
-      drawRay(ctx, rx * 0.26 * Math.max(0.08, open));
-      ctx.stroke();
-    } else {
-      const erx = rx * 0.11;
-      const ery = Math.max(ry * 0.2 * open, 0.55 / cam.s);
-      ctx.beginPath();
-      ctx.ellipse(0, 0, erx, ery, 0, 0, TAU);
-      ctx.fill();
-    }
+    ctx.lineWidth = Math.max(0.45 / cam.s, ew * 0.1);
+    ctx.strokeStyle = ball.color === 0 ? "rgba(238,239,220,0.62)" : "rgba(6,13,9,0.75)";
+    ctx.stroke();
     ctx.restore();
   }
 
   const BALL_TONES: Record<BallKind, [string, string, string, string][]> = {
     metal: [
-      ["#ffffff", "#c5ccd6", "#8b94a3", "#161920"],
-      ["#fff6d6", "#e4c27a", "#a9762f", "#2a1a08"],
-      ["#ffe3d4", "#d4896c", "#8d4a33", "#240e06"],
+      ["#555b58", "#202522", "#090b0a", "#010202"],
+      ["#ffffff", "#f1f2ec", "#c5ccc6", "#59635d"],
+      ["#bce8c1", "#4a8d51", "#1d4c25", "#07180b"],
     ],
     rubber: [
-      ["#707a8f", "#262a33", "#111318", "#020204"],
-      ["#ffffff", "#f3f3ee", "#bfc2cb", "#6c707b"],
-      ["#b9ffd2", "#22c55e", "#0f8a3f", "#032a14"],
+      ["#424744", "#191d1a", "#080a08", "#010201"],
+      ["#ffffff", "#fafbf6", "#e0e5de", "#a0aaa1"],
+      ["#b5dcb6", "#407846", "#1a4221", "#061308"],
     ],
   };
 
@@ -1934,63 +1926,31 @@ export function startCrawl(opts: {
     }
     // bounce light from the page underneath
     const under = ctx.createRadialGradient(cx + rx * 0.1, cy + ry * 1.05, 0, cx + rx * 0.1, cy + ry * 1.05, ry * 0.9);
-    under.addColorStop(0, ball.color === 1 && !metal ? "rgba(90,120,170,0.3)" : "rgba(120,200,255,0.34)");
-    under.addColorStop(1, "rgba(120,200,255,0)");
+    under.addColorStop(0, ball.color === 2 ? "rgba(73,180,86,0.24)" : "rgba(247,225,167,0.22)");
+    under.addColorStop(1, "rgba(205,158,70,0)");
     ctx.fillStyle = under;
     ctx.fillRect(cx - rx, cy - ry, rx * 2, ry * 2);
     ctx.restore();
-    // cool rim on the shaded side
+    // soft warm rim keeps the orb readable without extra attachments
     ctx.beginPath();
     ctx.ellipse(cx, cy, rx * 0.97, ry * 0.97, 0, Math.PI * 0.08, Math.PI * 0.72);
     ctx.lineWidth = Math.max(R * 0.06, 0.8 / cam.s);
-    ctx.strokeStyle = metal ? "rgba(255,255,255,0.35)" : "rgba(140,215,255,0.45)";
+    ctx.strokeStyle = metal ? "rgba(255,255,255,0.48)" : "rgba(227,255,232,0.3)";
     ctx.stroke();
     // specular
     ctx.beginPath();
     ctx.ellipse(cx - rx * 0.34, cy - ry * 0.42, rx * 0.26, ry * 0.15, -0.6, 0, TAU);
-    ctx.fillStyle = metal ? "rgba(255,255,255,0.85)" : "rgba(255,255,255,0.5)";
+    ctx.fillStyle = metal ? "rgba(255,255,255,0.86)" : "rgba(255,255,255,0.26)";
     ctx.fill();
     ctx.beginPath();
     ctx.arc(cx - rx * 0.46, cy - ry * 0.58, R * 0.05, 0, TAU);
     ctx.fillStyle = "rgba(255,255,255,0.95)";
     ctx.fill();
-    // little bot head: antenna, visor, eyes. the face turns toward where it rolls
-    const f = ball.face;
-    const ff = 1 - 0.34 * Math.abs(f);
-    const off = f * rx * 0.36;
-    const wob = opts.reduced ? 0 : Math.sin(spinT * 7 + ball.page * 1.3 + ball.color) * rx * 0.07 - ball.vx * cam.s * 0.00006 * R;
-    const tipX = cx + off * 0.5 + wob;
-    const tipY = cy - ry * (1.38 + 0.1 * Math.min(1, ball.squash));
-    ctx.beginPath();
-    ctx.moveTo(cx + off * 0.3, cy - ry * 0.96);
-    ctx.quadraticCurveTo(cx + off * 0.4, cy - ry * 1.2, tipX, tipY);
-    ctx.lineWidth = Math.max(R * 0.05, 0.9 / cam.s);
-    ctx.strokeStyle = "rgba(20,22,28,0.9)";
-    ctx.lineCap = "round";
-    ctx.stroke();
-    const tip = ctx.createRadialGradient(tipX, tipY, 0, tipX, tipY, R * 0.2);
-    tip.addColorStop(0, "#d8fbff");
-    tip.addColorStop(0.35, "#5ce1ff");
-    tip.addColorStop(1, "rgba(92,225,255,0)");
-    ctx.fillStyle = tip;
-    ctx.beginPath();
-    ctx.arc(tipX, tipY, R * 0.2, 0, TAU);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.ellipse(cx + off, cy - ry * 0.06, rx * 0.66 * ff, ry * 0.34, 0, 0, TAU);
-    ctx.fillStyle = "rgba(4,8,16,0.9)";
-    ctx.fill();
-    ctx.lineWidth = Math.max(R * 0.03, 0.6 / cam.s);
-    ctx.strokeStyle = "rgba(140,210,255,0.4)";
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.ellipse(cx + off - rx * 0.1 * ff, cy - ry * 0.2, rx * 0.36 * ff, ry * 0.07, -0.08, Math.PI, TAU);
-    ctx.strokeStyle = "rgba(255,255,255,0.22)";
-    ctx.stroke();
+    // The paired eyes share one blink and one gaze vector.
+    const look = Math.max(-1, Math.min(1, (ball.vx * cam.s) / 640)) * rx * 0.055;
     const eyeY = cy - ry * 0.06;
-    const look = Math.max(-1, Math.min(1, (ball.vx * cam.s) / 640)) * rx * 0.05;
-    drawEye(ctx, ball, cx + off - rx * 0.25 * ff + look, eyeY, 0, rx, ry);
-    drawEye(ctx, ball, cx + off + rx * 0.25 * ff + look, eyeY, 1, rx, ry);
+    drawEye(ctx, ball, cx - rx * 0.22 + look, eyeY, rx, ry);
+    drawEye(ctx, ball, cx + rx * 0.22 + look, eyeY, rx, ry);
     ctx.restore();
   }
 
@@ -2015,14 +1975,37 @@ export function startCrawl(opts: {
     ctx.globalAlpha = 1;
   }
 
+  function drawBallTrails(ctx: CanvasRenderingContext2D) {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const ball of balls) {
+      const points = ball.trail;
+      if (points.length < 2) continue;
+      ctx.shadowColor = ball.kind === "metal" ? "rgba(255,220,134,0.9)" : "rgba(222,171,70,0.76)";
+      ctx.shadowBlur = 15 / camScale();
+      for (let i = 2; i < points.length - 1; i++) {
+        const age = i / (points.length - 1);
+        ctx.globalAlpha = (1 - age) * 0.78;
+        ctx.strokeStyle = i < 3 ? "#fff1bd" : ball.kind === "metal" ? "#e8b84e" : "#c58c28";
+        ctx.lineWidth = (0.8 + (1 - age) * (ball.kind === "metal" ? 3.1 : 2.5)) / camScale();
+        ctx.beginPath();
+        ctx.moveTo(points[i + 1].x, points[i + 1].y);
+        ctx.lineTo(points[i].x, points[i].y);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
   // ---------- spiders that walk the web ----------
   const spiderTargets: Pt[] = Array.from({ length: 8 }, () => ({ x: 0, y: 0 }));
 
   function footTargets(sp: Spider, R: number) {
     const ch = Math.cos(sp.heading);
     const sh = Math.sin(sp.heading);
-    const fwd = [1.8, 0.7, -0.55, -1.75];
-    const lat = [2.5, 3.2, 3.3, 2.7];
+    const fwd = [1.75, 0.65, -0.65, -1.75];
+    const lat = [2.65, 3.05, 3.05, 2.65];
     for (let i = 0; i < 8; i++) {
       const k = i % 4;
       const side = i < 4 ? -1 : 1;
@@ -2056,7 +2039,7 @@ export function startCrawl(opts: {
         }
       }
       strandPoint(wb, edge, u, webT, 0, tmpA);
-      const size = 15 + Math.random() * 7;
+      const size = 23 + Math.random() * 8;
       const R = size / s;
       const sp: Spider = {
         edge,
@@ -2213,61 +2196,50 @@ export function startCrawl(opts: {
     for (let i = 0; i < 8; i++) {
       const foot = sp.feet[i];
       const lift = sp.stepU[i] >= 0 ? Math.sin(Math.PI * Math.min(1, sp.stepU[i])) : 0;
-      const hip = { x: hub.x + ch * R * (0.9 - (i % 4) * 0.5), y: hub.y + sh * R * (0.9 - (i % 4) * 0.5) };
-      drawLeg(ctx, hip, { x: foot.x, y: foot.y - lift * R * 0.7 }, cam.s, { color: sp.accent, lift, stretch: 0, wob: 0, width: Math.max(1.6, sp.size * 0.16), dark: true });
+      const side = i < 4 ? -1 : 1;
+      const along = [1.42, 0.48, -0.48, -1.42][i % 4];
+      const across = side * (0.72 + (i % 4 === 1 || i % 4 === 2 ? 0.12 : 0));
+      const hip = {
+        x: hub.x + ch * R * along - sh * R * across,
+        y: hub.y + sh * R * along + ch * R * across,
+      };
+      drawLeg(ctx, hip, { x: foot.x, y: foot.y - lift * R * 0.7 }, cam.s, { color: sp.accent, lift, stretch: 0, wob: 0, width: Math.max(2.2, sp.size * 0.21), dark: true });
     }
-    const body = (bx: number, by: number, rx: number, ry: number, tone: [string, string, string]) => {
-      const g = ctx.createRadialGradient(bx - rx * 0.4, by - ry * 0.5, rx * 0.05, bx, by, Math.max(rx, ry) * 1.1);
-      g.addColorStop(0, tone[0]);
-      g.addColorStop(0.35, tone[1]);
-      g.addColorStop(1, tone[2]);
-      ctx.beginPath();
-      ctx.ellipse(bx, by, rx, ry, sp.heading, 0, TAU);
-      ctx.fillStyle = g;
-      ctx.fill();
-      ctx.lineWidth = 0.9 / cam.s;
-      ctx.strokeStyle = "rgba(0,0,0,0.6)";
-      ctx.stroke();
-    };
-    const ab = { x: hub.x - ch * R * 1.2, y: hub.y - sh * R * 1.2 };
-    body(ab.x, ab.y, R * 1.35, R * 1.05, ["#5a6272", "#1b1e27", "#050609"]);
-    // glowing mark on the back
-    for (const [t, r] of [
-      [-0.2, 0.34],
-      [0.35, 0.22],
-    ] as const) {
-      ctx.beginPath();
-      ctx.ellipse(ab.x + ch * R * t, ab.y + sh * R * t, R * r, R * r * 0.7, sp.heading, 0, TAU);
-      ctx.fillStyle = hexA(sp.accent, 0.85);
-      ctx.fill();
-    }
-    body(hub.x + ch * R * 0.35, hub.y + sh * R * 0.35, R * 0.95, R * 0.8, ["#6a7384", "#242833", "#07080c"]);
+    ctx.save();
+    ctx.translate(hub.x, hub.y);
+    ctx.rotate(sp.heading);
+    const shell = ctx.createLinearGradient(-R * 1.8, -R, R * 1.8, R);
+    shell.addColorStop(0, "#5a615d");
+    shell.addColorStop(0.28, "#252b27");
+    shell.addColorStop(0.74, "#141916");
+    shell.addColorStop(1, "#050806");
     ctx.beginPath();
-    ctx.ellipse(ab.x - R * 0.32, ab.y - R * 0.46, R * 0.5, R * 0.22, sp.heading - 0.5, 0, TAU);
-    ctx.fillStyle = "rgba(255,255,255,0.3)";
+    ctx.roundRect(-R * 1.9, -R * 0.9, R * 3.8, R * 1.8, R * 0.48);
+    ctx.fillStyle = shell;
     ctx.fill();
-    const fx = hub.x + ch * R * 1.18;
-    const fy = hub.y + sh * R * 1.18;
-    for (const [side, size] of [
-      [-0.32, 0.2],
-      [0.32, 0.2],
-      [-0.6, 0.12],
-      [0.6, 0.12],
-    ] as const) {
-      const ex = fx - sh * R * side;
-      const ey = fy + ch * R * side;
-      const halo = ctx.createRadialGradient(ex, ey, 0, ex, ey, R * size * 2.6);
-      halo.addColorStop(0, hexA(sp.accent, 0.7));
-      halo.addColorStop(1, hexA(sp.accent, 0));
-      ctx.fillStyle = halo;
+    ctx.lineWidth = 1.2 / cam.s;
+    ctx.strokeStyle = "rgba(226,190,116,0.72)";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.roundRect(R * 0.48, -R * 0.68, R * 1.32, R * 1.36, R * 0.42);
+    ctx.fillStyle = "#313a34";
+    ctx.fill();
+    ctx.lineWidth = 0.75 / cam.s;
+    ctx.strokeStyle = "rgba(255,255,255,0.24)";
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-R * 1.15, 0);
+    ctx.lineTo(R * 0.3, 0);
+    ctx.strokeStyle = "rgba(224,184,98,0.48)";
+    ctx.lineWidth = 1.1 / cam.s;
+    ctx.stroke();
+    for (const ey of [-0.25, 0.25]) {
       ctx.beginPath();
-      ctx.arc(ex, ey, R * size * 2.6, 0, TAU);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(ex, ey, R * size, 0, TAU);
-      ctx.fillStyle = "#f6fbff";
+      ctx.ellipse(R * 1.48, R * ey, R * 0.1, R * 0.22, 0.08, 0, TAU);
+      ctx.fillStyle = "#f6f1de";
       ctx.fill();
     }
+    ctx.restore();
   }
 
   function drawWeb(ctx: CanvasRenderingContext2D) {
@@ -2280,39 +2252,11 @@ export function startCrawl(opts: {
     const B = { x: 0, y: 0 };
     const C = { x: 0, y: 0 };
     const P = { x: 0, y: 0 };
-    const tips: Pt[] = [];
-    const path = (kind: "spoke" | "ring") => {
-      ctx.beginPath();
-      for (const st of wb.strands) {
-        if (st.kind !== kind) continue;
-        const p = Math.max(0, Math.min(1, (t - st.delay) / st.dur));
-        if (p <= 0) continue;
-        sway(wb.nodes[st.a], t, amp, A);
-        sway(wb.nodes[st.b], t, amp, B);
-        sway(st.c, t, amp, C);
-        const n = Math.max(1, Math.ceil(st.samples * p));
-        ctx.moveTo(A.x, A.y);
-        for (let k = 1; k <= n; k++) {
-          quadAt(A, C, B, (p * k) / n, P);
-          ctx.lineTo(P.x, P.y);
-        }
-        if (p < 1 && tips.length < 24) tips.push({ x: P.x, y: P.y });
-      }
-    };
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
-    for (const kind of ["ring", "spoke"] as const) {
-      path(kind);
-      ctx.strokeStyle = "rgba(0,0,0,0.34)";
-      ctx.lineWidth = (kind === "spoke" ? 2.6 : 2.1) / sc;
-      ctx.stroke();
-      ctx.strokeStyle = kind === "spoke" ? "rgba(240,246,255,0.8)" : "rgba(226,234,252,0.62)";
-      ctx.lineWidth = (kind === "spoke" ? 1.05 : 0.8) / sc;
-      ctx.stroke();
-    }
-    // ties and links
+    // Draw only the perimeter loops: no spokes, center weave, or page-to-page links.
     for (const st of wb.strands) {
-      if (st.kind !== "tie" && st.kind !== "link") continue;
+      if (st.kind !== "ring") continue;
       const p = Math.max(0, Math.min(1, (t - st.delay) / st.dur));
       if (p <= 0) continue;
       sway(wb.nodes[st.a], t, amp, A);
@@ -2325,53 +2269,15 @@ export function startCrawl(opts: {
         quadAt(A, C, B, (p * k) / n, P);
         ctx.lineTo(P.x, P.y);
       }
-      if (p < 1 && tips.length < 24) tips.push({ x: P.x, y: P.y });
-      if (st.kind === "tie") {
-        ctx.strokeStyle = "rgba(240,246,255,0.34)";
-        ctx.lineWidth = 0.7 / sc;
-        ctx.stroke();
-        continue;
-      }
-      const color = THREAD_INK[st.ink % 3];
-      ctx.strokeStyle = color === "#111111" ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0.55)";
-      ctx.globalAlpha = 0.9;
-      ctx.lineWidth = (st.hot ? 4.4 : 2.8) / sc;
+      const color = THREAD_INK[st.ink % THREAD_INK.length];
+      ctx.globalAlpha = p < 1 ? 0.35 + p * 0.5 : 0.85;
+      ctx.strokeStyle = "rgba(0,0,0,0.5)";
+      ctx.lineWidth = 2.2 / sc;
       ctx.stroke();
       ctx.strokeStyle = color;
-      ctx.globalAlpha = st.hot ? 1 : 0.85;
-      ctx.lineWidth = (st.hot ? 2.1 : 1.15) / sc;
+      ctx.lineWidth = 1.2 / sc;
       ctx.stroke();
       ctx.globalAlpha = 1;
-      if (p >= 1) {
-        const knot = (st.hot ? 5.2 : 3.4) / sc;
-        ctx.fillStyle = color === "#111111" ? "#f6f6f1" : color;
-        ctx.fillRect(A.x - knot / 2, A.y - knot / 2, knot, knot);
-        ctx.fillRect(B.x - knot / 2, B.y - knot / 2, knot, knot);
-      }
-    }
-    // dew, once the spiral is mostly in
-    if (t > 2.6) {
-      const fade = Math.min(1, (t - 2.6) / 1.2);
-      for (const d of wb.dew) {
-        sway(wb.nodes[d.node], t, amp, A);
-        const r = d.r / Math.max(0.2, sc) ** 0.6;
-        const tw = opts.reduced ? 0.8 : 0.6 + 0.4 * Math.sin(t * 2.2 + d.phase);
-        const g = ctx.createRadialGradient(A.x - r * 0.3, A.y - r * 0.35, 0, A.x, A.y, r);
-        g.addColorStop(0, `rgba(255,255,255,${0.95 * tw * fade})`);
-        g.addColorStop(0.5, `rgba(190,225,255,${0.45 * fade})`);
-        g.addColorStop(1, "rgba(120,180,255,0)");
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.arc(A.x, A.y, r, 0, TAU);
-        ctx.fill();
-      }
-    }
-    // the thread being spun right now
-    for (const tip of tips) {
-      ctx.beginPath();
-      ctx.arc(tip.x, tip.y, 2.6 / sc, 0, TAU);
-      ctx.fillStyle = "rgba(255,255,255,0.95)";
-      ctx.fill();
     }
   }
 
@@ -2530,10 +2436,24 @@ export function startCrawl(opts: {
     drawEvidenceThreads(ctx);
     if (glints.length) {
       ctx.save();
+      ctx.globalCompositeOperation = "screen";
+      ctx.shadowColor = "rgba(250,190,72,0.8)";
+      ctx.shadowBlur = 13 / camScale();
       for (const glow of glints) {
-        ctx.globalAlpha = Math.min(0.62, glow.life);
-        ctx.fillStyle = "#f0b429";
-        ctx.fillRect(glow.x, glow.y, glow.w, Math.max(10, glow.h));
+        ctx.globalAlpha = Math.min(0.58, glow.life * 0.72);
+        const height = Math.max(10, glow.h);
+        const sheen = ctx.createLinearGradient(0, glow.y, 0, glow.y + height);
+        sheen.addColorStop(0, "rgba(255,221,142,0.08)");
+        sheen.addColorStop(0.48, "rgba(241,180,61,0.72)");
+        sheen.addColorStop(1, "rgba(255,207,93,0.12)");
+        ctx.fillStyle = sheen;
+        ctx.fillRect(glow.x, glow.y, glow.w, height);
+        ctx.beginPath();
+        ctx.moveTo(glow.x, glow.y + height * 0.54);
+        ctx.lineTo(glow.x + glow.w, glow.y + height * 0.54);
+        ctx.strokeStyle = "rgba(255,223,155,0.9)";
+        ctx.lineWidth = 1.1 / camScale();
+        ctx.stroke();
       }
       ctx.restore();
     }
@@ -2578,8 +2498,13 @@ export function startCrawl(opts: {
         const wobble = opts.reduced ? 0 : Math.sin(agent.age * 7.5 + i * 1.15) * 0.07;
         const lift = !opts.reduced && !agent.flying && !page.barren && agent.stepU[i] >= 0 ? Math.sin(Math.PI * Math.min(1, agent.stepU[i])) : 0;
         const color = i < 2 && pose ? pose.color : LEGS[i];
+        const side = i < 4 ? -1 : 1;
+        const anchor = {
+          x: body.x + (((i % 4) - 1.5) * 7.2) / cam.s,
+          y: body.y + (side * 6.6) / cam.s,
+        };
         ctx.globalAlpha = fade;
-        drawLeg(ctx, body, { x: placed.x, y: placed.y - (lift * 7) / cam.s }, cam.s, { color, lift, stretch, wob: wobble, width: 1, dark: false });
+        drawLeg(ctx, anchor, { x: placed.x, y: placed.y - (lift * 7) / cam.s }, cam.s, { color, lift, stretch, wob: wobble, width: 1.35, dark: false });
         ctx.globalAlpha = 1;
       }
       const perch = party === "friends" ? balls[ai] : undefined;
@@ -2588,29 +2513,32 @@ export function startCrawl(opts: {
         perch.y = body.y + Math.sin(agent.age * 6.2) * (2.2 / camScale());
         drawBall(ctx, perch, fade);
       } else {
-        const hub = pose?.color ?? "#5ce1ff";
-        const grow = 1 + 0.9 * stretch;
-        const hx = (6.5 / cam.s) * grow;
-        const hy = (7.4 / cam.s) * grow;
+        const hub = "#d8b05c";
+        const grow = 1 + 0.35 * stretch;
+        const bw = (17 / cam.s) * grow;
+        const bh = (10 / cam.s) * grow;
         ctx.globalAlpha = fade;
+        ctx.shadowColor = "rgba(222,176,83,0.32)";
+        ctx.shadowBlur = 7 / cam.s;
         ctx.beginPath();
-        ctx.moveTo(body.x, body.y - hy);
-        ctx.lineTo(body.x + hx, body.y);
-        ctx.lineTo(body.x, body.y + hy);
-        ctx.lineTo(body.x - hx, body.y);
-        ctx.closePath();
-        ctx.fillStyle = "#07080c";
+        ctx.roundRect(body.x - bw, body.y - bh, bw * 2, bh * 2, 4 / cam.s);
+        ctx.fillStyle = "#111719";
         ctx.fill();
-        ctx.lineWidth = 1.4 / cam.s;
-        ctx.strokeStyle = hub;
+        ctx.shadowColor = "transparent";
+        ctx.lineWidth = 1.8 / cam.s;
+        ctx.strokeStyle = "rgba(0,0,0,0.82)";
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(body.x, body.y, (1.8 / cam.s) * (1 + 0.35 * stretch), 0, Math.PI * 2);
-        ctx.fillStyle = hub;
-        ctx.fill();
+        ctx.roundRect(body.x - bw + 1 / cam.s, body.y - bh + 1 / cam.s, bw * 2 - 2 / cam.s, bh * 2 - 2 / cam.s, 3 / cam.s);
+        ctx.lineWidth = 1.15 / cam.s;
+        ctx.strokeStyle = hexA(hub, 0.86);
+        ctx.stroke();
+        ctx.fillStyle = hexA(hub, 0.9);
+        ctx.fillRect(body.x - 2 / cam.s, body.y - 1 / cam.s, 4 / cam.s, 2 / cam.s);
         ctx.globalAlpha = 1;
       }
     });
+    drawBallTrails(ctx);
     drawBalls(ctx);
     for (const sp of spiders) drawSpider(ctx, sp);
     drawSparks(ctx);
@@ -2646,6 +2574,8 @@ export function startCrawl(opts: {
       finished = true;
       buildWeb();
       ensureSwarm(true);
+      webT = Math.max(webT, 9);
+      if (party === "off") spawnSpiders();
     }
     webT = Math.max(webT, 9);
     glints.length = 0;
@@ -2688,7 +2618,7 @@ export function startCrawl(opts: {
       }
       if (showT >= showFor) settleFinale();
     }
-    if (!paused && viewW > 2 && (!frozen || party !== "off")) {
+    if (!paused && viewW > 2 && (!frozen || party !== "off" || spiders.length > 0)) {
       const fast = opts.reduced;
       const paced = dt * clockPace();
       if (mode === "read") {
@@ -2753,6 +2683,7 @@ export function startCrawl(opts: {
         const dur = fast ? 0.4 : 0.9;
         if (tween <= dur) tweenCam(dur);
         stepSwarm(dt, null);
+        if (spiders.length) stepSpiders(dt);
         skitter(dt);
         const on = flashOn(finaleT);
         if (on !== markOn) {
