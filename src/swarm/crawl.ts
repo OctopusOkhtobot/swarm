@@ -576,6 +576,36 @@ export function startCrawl(opts: {
     }
   }
 
+  function chosenWord() {
+    const typed = (opts.topic ?? "").trim().toLowerCase();
+    if ((opts.weave ?? "rhyme") === "topic" && typed.length >= 2) return typed;
+    const stop = new Set([
+      "the", "and", "for", "that", "with", "this", "from", "are", "was", "were", "you", "your", "not", "but",
+      "have", "has", "had", "its", "into", "about", "http", "https", "www", "com", "function", "const", "return",
+      "import", "export", "في", "من", "على", "إلى", "الى", "هذا", "هذه", "التي", "الذي", "كان", "عن", "مع",
+    ]);
+    const seen = new Map<string, number>();
+    (opts.docs ?? []).forEach((doc) => {
+      const pageWords = new Set<string>();
+      for (const line of doc.lines) {
+        const words = line.text.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? [];
+        for (const word of words) {
+          if (!stop.has(word)) pageWords.add(word);
+        }
+      }
+      for (const word of pageWords) seen.set(word, (seen.get(word) ?? 0) + 1);
+    });
+    let best = "";
+    let hits = 1;
+    for (const [word, count] of seen) {
+      if (count > hits || (count === hits && word.length > best.length)) {
+        best = word;
+        hits = count;
+      }
+    }
+    return hits >= 2 ? best : "";
+  }
+
   function buildWeb(): Web {
     if (web) return web;
     let minX = Infinity;
@@ -588,9 +618,12 @@ export function startCrawl(opts: {
       maxX = Math.max(maxX, page.x + page.w);
       maxY = Math.max(maxY, page.y + page.h);
     }
-    const topicMode = (opts.weave ?? "rhyme") === "topic" && (opts.topic ?? "").trim().length >= 2;
-    const perPage = pages.map((page, index) => anchorsOf(page, opts.docs?.[index], topicMode ? (opts.topic ?? "") : ""));
-    web = makeWeb({ minX, minY, maxX, maxY }, perPage, topicMode);
+    const word = chosenWord();
+    const perPage = pages.map((page, index) => {
+      if (!word) return [];
+      return anchorsOf(page, opts.docs?.[index], word).filter((anchor) => anchor.score > 0);
+    });
+    web = makeWeb({ minX, minY, maxX, maxY }, perPage, true);
     threadCount = web.total;
     return web;
   }
@@ -1565,6 +1598,7 @@ export function startCrawl(opts: {
 
   function beginTransit() {
     const next = pickNext();
+    ensureSwarm();
     setTravel(overviewCam());
     opts.audio.play("thread");
     if (next < 0) {
@@ -1800,7 +1834,7 @@ export function startCrawl(opts: {
     const sw = (word.w / page.w) * img.naturalWidth;
     const sh = (word.h / page.h) * img.naturalHeight;
     if (sw < 1 || sh < 1 || sx < -2 || sy < -2) return;
-    const sc = 1 + 0.34 * amp;
+    const sc = 1 + 0.12 * amp;
     const cx = word.x + word.w / 2;
     const cy = word.y + word.h / 2;
     ctx.save();
@@ -1968,7 +2002,7 @@ export function startCrawl(opts: {
     const ry = Math.max(R * 0.5, R * (1 - (metal ? 0.14 : 0.4) * squash));
     const cx = ball.x;
     const cy = ball.perch ? ball.y : ball.y - ball.h - ry * 0.92;
-    if (party === "chaos") {
+    if (party === "chaos" || party === "friends") {
       drawGrok(ctx, cx, cy, Math.max(rx, ry), Math.sin(spinT * 0.85) * 0.7, opts.reduced ? 1 : grokOpen(spinT), alpha);
       return;
     }
@@ -2551,39 +2585,18 @@ export function startCrawl(opts: {
     }
     for (const ball of balls) drawBallShadow(ctx, ball);
     for (const sp of spiders) drawSpiderShadow(ctx, sp);
-    if (web) drawWeb(ctx);
+    if (web && (finished || mode === "finale")) drawWeb(ctx);
     agents.forEach((agent, ai) => {
       const page = pages[agent.page];
       if (!page || party === "spiders") return;
       const pose = agent.flying || !page.lines.length ? null : poseOf(page.lines, agent, opts.dir);
       const fade = Math.min(1, agent.age / 0.28);
-      const barTurn = opts.reduced || chaos ? 0 : spinT * 0.95;
       const live = page.lines[agent.line];
-      if (pose && live && !page.barren && !chaos) {
-        const plate = { x: live.x0, y: live.y - 2, w: Math.max(24, live.x1 - live.x0), h: live.h + 4 };
-        tumbleStrip(ctx, page, plate, barTurn, fade);
-        fillMark(ctx, plate, pose.color, page.dark, cam.s, fade, barTurn);
-        const tied = agent.marks.slice(-3);
-        for (let i = 1; i < tied.length; i++) {
-          const a = tied[i - 1];
-          const b = tied[i];
-          const ax = a.x + a.w / 2;
-          const ay = a.y + a.h / 2;
-          const bx = b.x + b.w / 2;
-          const by = b.y + b.h / 2;
-          ctx.beginPath();
-          ctx.moveTo(ax, ay);
-          ctx.quadraticCurveTo((ax + bx) / 2, (ay + by) / 2 + 14, bx, by);
-          ctx.strokeStyle = b.color;
-          ctx.lineWidth = 1.7 / cam.s;
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(bx, by, 3.6 / cam.s, 0, TAU);
-          ctx.fillStyle = b.color;
-          ctx.fill();
-        }
+      if (pose && live && !page.barren && party === "off") {
+        const plate = { x: live.x0, y: live.y - 1, w: Math.max(24, live.x1 - live.x0), h: live.h + 2 };
+        fillMark(ctx, plate, pose.color, page.dark, cam.s, fade, 0);
       }
-      if (!page.barren && !chaos) {
+      if (!page.barren && party === "off") {
         for (const mark of agent.marks) fillMark(ctx, mark, mark.color, page.dark, cam.s, mark.a * fade);
       }
       if (!page.barren && !chaos && !opts.reduced && !agent.flying && agent.page === focus && (mode === "read" || mode === "dive")) {
@@ -2597,14 +2610,51 @@ export function startCrawl(opts: {
         ctx.fillStyle = "rgba(255,255,255,0.92)";
         ctx.fillRect(pose.head - 1 / cam.s, pose.bar.y, 2 / cam.s, pose.bar.h);
       }
-      const bx = pose?.body.x ?? agent.body.x;
-      const by = (pose?.body.y ?? agent.body.y) - 8 / cam.s;
-      const gaze = Math.sin(spinT * 0.85) * 0.7;
-      drawGrok(ctx, bx, by, Math.min(56, 30 / cam.s), gaze, opts.reduced ? 1 : grokOpen(spinT), fade);
+      const hideSpider = party === "chaos" || party === "friends";
+      const stand = pose?.body ?? agent.body;
+      if (!hideSpider) {
+        const stretch = opts.reduced || agent.flying || page.barren ? 0 : stretchOf(agent.age, agent.salt).amp;
+        const reach = 1 + 0.46 * stretch;
+        const body = { x: agent.body.x, y: agent.body.y - 20 * stretch };
+        for (let i = 0; i < 8; i++) {
+          const foot = agent.feet[i];
+          const placed = {
+            x: agent.body.x + (foot.x - agent.body.x) * reach,
+            y: agent.body.y + (foot.y - agent.body.y) * reach,
+          };
+          const wobble = opts.reduced ? 0 : Math.sin(agent.age * 7.5 + i * 1.15) * 0.07;
+          const lift = !opts.reduced && !agent.flying && !page.barren && agent.stepU[i] >= 0 ? Math.sin(Math.PI * Math.min(1, agent.stepU[i])) : 0;
+          const color = i < 2 && pose ? pose.color : LEGS[i];
+          ctx.globalAlpha = fade;
+          drawLeg(ctx, body, { x: placed.x, y: placed.y - (lift * 7) / cam.s }, cam.s, { color, lift, stretch, wob: wobble, width: 1, dark: false });
+          ctx.globalAlpha = 1;
+        }
+        const hub = pose?.color ?? "#5ce1ff";
+        const grow = 1 + 0.9 * stretch;
+        const hx = (6.5 / cam.s) * grow;
+        const hy = (7.4 / cam.s) * grow;
+        ctx.globalAlpha = fade;
+        ctx.beginPath();
+        ctx.moveTo(body.x, body.y - hy);
+        ctx.lineTo(body.x + hx, body.y);
+        ctx.lineTo(body.x, body.y + hy);
+        ctx.lineTo(body.x - hx, body.y);
+        ctx.closePath();
+        ctx.fillStyle = "#07080c";
+        ctx.fill();
+        ctx.lineWidth = 1.4 / cam.s;
+        ctx.strokeStyle = hub;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(body.x, body.y, (1.8 / cam.s) * (1 + 0.35 * stretch), 0, Math.PI * 2);
+        ctx.fillStyle = hub;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      }
       const perch = party === "friends" ? balls[ai] : undefined;
       if (perch?.perch) {
-        perch.x = bx;
-        perch.y = by;
+        perch.x = stand.x;
+        perch.y = stand.y;
         drawBall(ctx, perch, fade);
       }
     });
@@ -2677,7 +2727,6 @@ export function startCrawl(opts: {
     }
     if (!paused && viewW > 2) webT += dt;
     if (!paused && viewW > 2 && !frozen) {
-      hatchFromThreads();
       showT += dt;
       spinT += dt;
       for (let i = glints.length - 1; i >= 0; i--) {
@@ -2768,7 +2817,6 @@ export function startCrawl(opts: {
     raf = requestAnimationFrame(frame);
   }
 
-  buildWeb();
   raf = requestAnimationFrame(frame);
   return {
     stop() {

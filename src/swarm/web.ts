@@ -52,13 +52,13 @@ export function strandPoint(web: Web, index: number, u: number, t: number, amp: 
 }
 
 /**
- * Evidence-board strings: pins on lines, yarn drooping between them.
- * Ink 0 red, 1 black, 2 twine. Not a radial spider web.
+ * Strings between pages that share one word or topic.
+ * Caller passes only the matching anchors. Nothing is drawn until the crawl ends.
  */
 export function makeWeb(
   bounds: { minX: number; minY: number; maxX: number; maxY: number },
   perPage: Anchor[][],
-  topicMode: boolean,
+  _topicMode: boolean,
 ): Web {
   const w = Math.max(1, bounds.maxX - bounds.minX);
   const h = Math.max(1, bounds.maxY - bounds.minY);
@@ -78,8 +78,8 @@ export function makeWeb(
     const pb = nodes[b];
     const len = Math.hypot(pb.x - pa.x, pb.y - pa.y);
     if (len < 40) return;
-    const droop = Math.min(h * 0.08, len * (0.035 + Math.random() * 0.07));
-    const c = { x: (pa.x + pb.x) / 2 + (Math.random() - 0.5) * len * 0.03, y: (pa.y + pb.y) / 2 + droop };
+    const droop = Math.min(h * 0.05, len * 0.06);
+    const c = { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 + droop };
     strands.push({
       kind: "link",
       a,
@@ -87,10 +87,10 @@ export function makeWeb(
       c,
       len,
       delay,
-      dur: 0.7,
+      dur: 0.45,
       hot,
       ink: ink % 3,
-      samples: Math.max(4, Math.min(9, Math.round(len / 160))),
+      samples: Math.max(3, Math.min(7, Math.round(len / 180))),
     });
     const id = strands.length - 1;
     adj[a].push(id);
@@ -98,52 +98,25 @@ export function makeWeb(
   };
 
   const pins: number[][] = perPage.map((list) => {
-    if (!list.length) return [];
-    const pool = topicMode ? list.filter((item) => item.score > 0) : [];
-    const source = pool.length >= 2 ? pool : list;
-    const sorted = [...source].sort((p, q) => p.y - q.y);
-    const take = Math.min(4, sorted.length);
-    const picked: number[] = [];
-    const seen = new Set<number>();
-    for (let i = 0; i < take; i++) {
-      const idx = Math.round((i * (sorted.length - 1)) / Math.max(1, take - 1));
-      if (seen.has(idx)) continue;
-      seen.add(idx);
-      const item = sorted[idx];
-      picked.push(addNode({ x: item.x, y: item.y }));
-    }
-    return picked;
+    const ranked = [...list].sort((p, q) => q.score - p.score || p.y - q.y).slice(0, 2);
+    return ranked.map((item) => addNode({ x: item.x, y: item.y }));
   });
 
+  const alive = pins.map((pin, index) => ({ index, pin })).filter((item) => item.pin.length);
   let n = 0;
-  const stamp = () => 0.35 + n * 0.42;
-
-  for (let i = 0; i < pins.length; i++) {
-    const here = pins[i];
-    if (here.length < 2) continue;
-    addYarn(here[0], here[here.length - 1], stamp(), false, i % 3);
+  for (let i = 0; i < alive.length - 1; i++) {
+    addYarn(alive[i].pin[0], alive[i + 1].pin[0], 0.15, true, i % 3);
     n += 1;
-  }
-
-  for (let i = 0; i < pins.length; i++) {
-    for (let j = i + 1; j < pins.length; j++) {
-      const hop = j - i;
-      if (hop > 3) continue;
-      if (hop > 1 && Math.random() < 0.4) continue;
-      const A = pins[i];
-      const B = pins[j];
-      if (!A.length || !B.length) continue;
-      const hot = topicMode && hop <= 2;
-      const ink = hop === 1 ? 0 : hop === 2 ? 2 : 1;
-      addYarn(A[0], B[Math.min(B.length - 1, 1)], stamp(), hot, ink);
+    const extraA = alive[i].pin[1];
+    const extraB = alive[i + 1].pin[1];
+    if (extraA != null && extraB != null) {
+      addYarn(extraA, extraB, 0.3, false, (i + 1) % 3);
       n += 1;
-      if (hop === 1 && A.length > 1 && B.length > 1) {
-        addYarn(A[A.length - 1], B[0], stamp(), hot, (ink + 1) % 3);
-        n += 1;
-      }
-      if (n >= 34) break;
     }
-    if (n >= 34) break;
+  }
+  if (alive.length >= 3) {
+    addYarn(alive[0].pin[0], alive[alive.length - 1].pin[0], 0.45, true, 2);
+    n += 1;
   }
 
   return { nodes, strands, adj, dew: [], center, radius: Math.hypot(w, h) / 2, links: n, total: strands.length };
