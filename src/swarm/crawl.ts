@@ -620,12 +620,35 @@ export function startCrawl(opts: {
     }
     const word = chosenWord();
     const perPage = pages.map((page, index) => {
-      if (!word) return [];
-      return anchorsOf(page, opts.docs?.[index], word).filter((anchor) => anchor.score > 0);
+      const all = anchorsOf(page, opts.docs?.[index], word);
+      const hits = word ? all.filter((anchor) => anchor.score > 0) : [];
+      const source = hits.length ? hits : all;
+      if (source.length) return source;
+      return [0.3, 0.55, 0.78].map((rel) => ({
+        x: page.x + page.w * (0.35 + rel * 0.3),
+        y: page.y + page.h * rel,
+        rel,
+        score: 0,
+      }));
     });
-    web = makeWeb({ minX, minY, maxX, maxY }, perPage, true);
+    web = makeWeb({ minX, minY, maxX, maxY }, perPage, Boolean(word));
     threadCount = web.total;
     return web;
+  }
+
+  let weaveBegun = false;
+  let weaveTick = 2.4;
+  function beginWeave() {
+    if (weaveBegun) return;
+    weaveBegun = true;
+    buildWeb();
+    if (party === "off") {
+      setTravel(overviewCam());
+      tween = 0;
+      mode = "finale";
+      finaleT = 0;
+      opts.audio.play("thread");
+    }
   }
 
   function pageAt(x: number, y: number) {
@@ -2002,7 +2025,7 @@ export function startCrawl(opts: {
     const ry = Math.max(R * 0.5, R * (1 - (metal ? 0.14 : 0.4) * squash));
     const cx = ball.x;
     const cy = ball.perch ? ball.y : ball.y - ball.h - ry * 0.92;
-    if (party === "chaos" || party === "friends") {
+    if (party === "chaos") {
       drawGrok(ctx, cx, cy, Math.max(rx, ry), Math.sin(spinT * 0.85) * 0.7, opts.reduced ? 1 : grokOpen(spinT), alpha);
       return;
     }
@@ -2371,7 +2394,7 @@ export function startCrawl(opts: {
   function drawWeb(ctx: CanvasRenderingContext2D) {
     const wb = web;
     if (!wb) return;
-    const t = webT;
+    const t = Math.max(0, Math.min(15, showT - (showFor - 15)));
     const amp = webAmp();
     const sc = cam.s;
     const A = { x: 0, y: 0 };
@@ -2585,7 +2608,7 @@ export function startCrawl(opts: {
     }
     for (const ball of balls) drawBallShadow(ctx, ball);
     for (const sp of spiders) drawSpiderShadow(ctx, sp);
-    if (web && (finished || mode === "finale")) drawWeb(ctx);
+    if (web && showT >= showFor - 15) drawWeb(ctx);
     agents.forEach((agent, ai) => {
       const page = pages[agent.page];
       if (!page || party === "spiders") return;
@@ -2610,12 +2633,16 @@ export function startCrawl(opts: {
         ctx.fillStyle = "rgba(255,255,255,0.92)";
         ctx.fillRect(pose.head - 1 / cam.s, pose.bar.y, 2 / cam.s, pose.bar.h);
       }
-      const hideSpider = party === "chaos" || party === "friends";
-      const stand = pose?.body ?? agent.body;
+      const hideSpider = party === "chaos";
       if (!hideSpider) {
         const stretch = opts.reduced || agent.flying || page.barren ? 0 : stretchOf(agent.age, agent.salt).amp;
         const reach = 1 + 0.46 * stretch;
         const body = { x: agent.body.x, y: agent.body.y - 20 * stretch };
+        const hub = pose?.color ?? "#5ce1ff";
+        const grow = 1 + 0.55 * stretch;
+        const limit = Math.min(page.w, page.h) * 0.075;
+        const hx = Math.min(26 / cam.s, limit) * grow;
+        const hy = Math.min(30 / cam.s, limit * 1.12) * grow;
         for (let i = 0; i < 8; i++) {
           const foot = agent.feet[i];
           const placed = {
@@ -2625,36 +2652,43 @@ export function startCrawl(opts: {
           const wobble = opts.reduced ? 0 : Math.sin(agent.age * 7.5 + i * 1.15) * 0.07;
           const lift = !opts.reduced && !agent.flying && !page.barren && agent.stepU[i] >= 0 ? Math.sin(Math.PI * Math.min(1, agent.stepU[i])) : 0;
           const color = i < 2 && pose ? pose.color : LEGS[i];
+          const dx = placed.x - body.x;
+          const dy = placed.y - body.y;
+          const reachLen = Math.hypot(dx, dy) || 1;
+          const hip = { x: body.x + (dx / reachLen) * hx * 0.85, y: body.y + (dy / reachLen) * hy * 0.72 };
           ctx.globalAlpha = fade;
-          drawLeg(ctx, body, { x: placed.x, y: placed.y - (lift * 7) / cam.s }, cam.s, { color, lift, stretch, wob: wobble, width: 1, dark: false });
+          drawLeg(ctx, hip, { x: placed.x, y: placed.y - (lift * 7) / cam.s }, cam.s, { color, lift, stretch, wob: wobble, width: 1.6, dark: false });
           ctx.globalAlpha = 1;
         }
-        const hub = pose?.color ?? "#5ce1ff";
-        const grow = 1 + 0.9 * stretch;
-        const hx = (6.5 / cam.s) * grow;
-        const hy = (7.4 / cam.s) * grow;
         ctx.globalAlpha = fade;
         ctx.beginPath();
-        ctx.moveTo(body.x, body.y - hy);
-        ctx.lineTo(body.x + hx, body.y);
-        ctx.lineTo(body.x, body.y + hy);
-        ctx.lineTo(body.x - hx, body.y);
-        ctx.closePath();
-        ctx.fillStyle = "#07080c";
+        ctx.ellipse(body.x - hx * 0.35, body.y + hy * 0.05, hx * 1.15, hy * 0.95, -0.4, 0, TAU);
+        ctx.fillStyle = "#101218";
         ctx.fill();
-        ctx.lineWidth = 1.4 / cam.s;
+        ctx.lineWidth = 1.8 / cam.s;
         ctx.strokeStyle = hub;
         ctx.stroke();
         ctx.beginPath();
-        ctx.arc(body.x, body.y, (1.8 / cam.s) * (1 + 0.35 * stretch), 0, Math.PI * 2);
+        ctx.ellipse(body.x + hx * 0.28, body.y - hy * 0.08, hx * 0.72, hy * 0.62, 0.35, 0, TAU);
+        ctx.fillStyle = "#07080c";
+        ctx.fill();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(body.x + hx * 0.2, body.y - hy * 0.12, (4.2 / cam.s) * (1 + 0.2 * stretch), 0, TAU);
         ctx.fillStyle = hub;
         ctx.fill();
         ctx.globalAlpha = 1;
       }
       const perch = party === "friends" ? balls[ai] : undefined;
       if (perch?.perch) {
-        perch.x = stand.x;
-        perch.y = stand.y;
+        perch.x = agent.body.x + 22 / cam.s;
+        perch.y = agent.body.y - 46 / cam.s;
+        ctx.beginPath();
+        ctx.moveTo(agent.body.x, agent.body.y);
+        ctx.quadraticCurveTo(agent.body.x + 12 / cam.s, agent.body.y - 20 / cam.s, perch.x, perch.y);
+        ctx.strokeStyle = "rgba(255,244,220,0.8)";
+        ctx.lineWidth = 1.3 / cam.s;
+        ctx.stroke();
         drawBall(ctx, perch, fade);
       }
     });
@@ -2732,6 +2766,16 @@ export function startCrawl(opts: {
       for (let i = glints.length - 1; i >= 0; i--) {
         glints[i].life -= dt;
         if (glints[i].life <= 0) glints.splice(i, 1);
+      }
+      if (showT >= showFor - 15) {
+        beginWeave();
+        if (party === "off") {
+          weaveTick -= dt;
+          if (weaveTick <= 0) {
+            opts.audio.play("thread");
+            weaveTick = 2.5;
+          }
+        }
       }
       if (showT >= showFor) settleFinale();
     }
